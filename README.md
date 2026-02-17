@@ -208,6 +208,7 @@ OpenCode Agent Review 是一个可选的代码审查功能，可以与内置的 
   OPENCODE_SERVER_USERNAME=opencode
   OPENCODE_SERVER_PASSWORD=your-password
   ```
+- [opencode示例配置](./opencode)
 
 #### 2. 功能说明
 
