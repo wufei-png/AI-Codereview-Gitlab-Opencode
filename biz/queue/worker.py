@@ -87,7 +87,16 @@ def _review_with_strategy(changes: list, commits_text: str, webhook_data: dict, 
         return CodeReviewer().review_and_strip_code(str(changes), commits_text)
 
 
+def is_llm_review_enabled() -> bool:
+    return os.environ.get('LLM_REVIEW_ENABLED', '1') == '1'
+
+
 def handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str, gitlab_url_slug: str):
+    if not is_llm_review_enabled():
+        logger.info(
+            '[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for push event.'
+        )
+        return
     push_review_enabled = os.environ.get('PUSH_REVIEW_ENABLED', '0') == '1'
     try:
         handler = PushHandler(webhook_data, gitlab_token, gitlab_url)
@@ -149,6 +158,9 @@ def handle_merge_request_event(webhook_data: dict, gitlab_token: str, gitlab_url
     :param gitlab_url_slug:
     :return:
     '''
+    if not is_llm_review_enabled():
+        logger.info('[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for merge request event.')
+        return
     merge_review_only_protected_branches = os.environ.get('MERGE_REVIEW_ONLY_PROTECTED_BRANCHES_ENABLED', '0') == '1'
     try:
         # 解析Webhook数据
@@ -237,7 +249,11 @@ def handle_merge_request_event(webhook_data: dict, gitlab_token: str, gitlab_url
         notifier.send_notification(content=error_message)
         logger.error('出现未知错误: %s', error_message)
 
+
 def handle_github_push_event(webhook_data: dict, github_token: str, github_url: str, github_url_slug: str):
+    if not is_llm_review_enabled():
+        logger.info('[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for GitHub push event.')
+        return
     push_review_enabled = os.environ.get('PUSH_REVIEW_ENABLED', '0') == '1'
     try:
         handler = GithubPushHandler(webhook_data, github_token, github_url)
@@ -299,6 +315,9 @@ def handle_github_pull_request_event(webhook_data: dict, github_token: str, gith
     :param github_url_slug:
     :return:
     '''
+    if not is_llm_review_enabled():
+        logger.info('[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for GitHub pull request event.')
+        return
     merge_review_only_protected_branches = os.environ.get('MERGE_REVIEW_ONLY_PROTECTED_BRANCHES_ENABLED', '0') == '1'
     try:
         # 解析Webhook数据
@@ -378,6 +397,9 @@ def handle_github_pull_request_event(webhook_data: dict, github_token: str, gith
 
 
 def handle_gitea_push_event(webhook_data: dict, gitea_token: str, gitea_url: str, gitea_url_slug: str):
+    if not is_llm_review_enabled():
+        logger.info('[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for Gitea push event.')
+        return
     push_review_enabled = os.environ.get('PUSH_REVIEW_ENABLED', '0') == '1'
     try:
         handler = GiteaPushHandler(webhook_data, gitea_token, gitea_url)
@@ -432,6 +454,9 @@ def handle_gitea_push_event(webhook_data: dict, gitea_token: str, gitea_url: str
 
 
 def handle_gitea_pull_request_event(webhook_data: dict, gitea_token: str, gitea_url: str, gitea_url_slug: str):
+    if not is_llm_review_enabled():
+        logger.info('[LLM Review] LLM_REVIEW_ENABLED=0, skipping LLM review for Gitea pull request event.')
+        return
     merge_review_only_protected_branches = os.environ.get('MERGE_REVIEW_ONLY_PROTECTED_BRANCHES_ENABLED', '0') == '1'
     try:
         handler = GiteaPullRequestHandler(webhook_data, gitea_token, gitea_url)
