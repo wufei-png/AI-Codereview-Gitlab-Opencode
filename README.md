@@ -1,5 +1,9 @@
 ![Push图片](doc/img/open/ai-codereview-cartoon.png)
 
+# AI-Codereview-Gitlab-Opencode
+
+基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 OpenCode Agent Review 版本，保留原有多平台 AI Code Review 能力，并新增 OpenCode Serve backend 集成。
+
 [开源版](README.md) | 
 [Pro版](doc/pro.md)
 
@@ -60,8 +64,8 @@ Note 中，便于团队查看和处理。
 
 - 克隆项目仓库：
 ```aiignore
-git clone https://github.com/sunmh207/AI-Codereview-Gitlab.git
-cd AI-Codereview-Gitlab
+git clone https://github.com/wufei-png/AI-Codereview-Gitlab-Opencode.git
+cd AI-Codereview-Gitlab-Opencode
 ```
 
 - 创建配置文件：
@@ -121,8 +125,8 @@ docker-compose up -d
 **1. 获取源码**
 
 ```bash
-git clone https://github.com/sunmh207/AI-Codereview-Gitlab.git
-cd AI-Codereview-Gitlab
+git clone https://github.com/wufei-png/AI-Codereview-Gitlab-Opencode.git
+cd AI-Codereview-Gitlab-Opencode
 ```
 
 **2. 安装依赖**
@@ -293,4 +297,4 @@ curl -fsSL https://raw.githubusercontent.com/sunmh207/AI-Codereview-Gitlab/refs/
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=sunmh207/AI-Codereview-Gitlab&type=Timeline)](https://www.star-history.com/#sunmh207/AI-Codereview-Gitlab&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=wufei-png/AI-Codereview-Gitlab-Opencode&type=Timeline)](https://www.star-history.com/#wufei-png/AI-Codereview-Gitlab-Opencode&Timeline)
