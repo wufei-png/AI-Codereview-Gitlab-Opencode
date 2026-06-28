@@ -38,8 +38,14 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 console_handler.setLevel(LOG_LEVEL)
 
 
-# 使用自定义的 Logger 类
-logger = CustomLogger(__name__)
-logger.setLevel(LOG_LEVEL)  # 设置 Logger 的日志级别
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
+_logger_class = logging.getLoggerClass()
+logging.setLoggerClass(CustomLogger)
+logger = logging.getLogger(__name__)
+logging.setLoggerClass(_logger_class)
+
+# Let handlers enforce LOG_LEVEL so caplog/root handlers can still observe DEBUG
+# records when explicitly configured to do so.
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
