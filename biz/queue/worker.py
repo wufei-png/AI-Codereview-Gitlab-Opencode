@@ -10,6 +10,7 @@ from biz.platforms.gitea.webhook_handler import filter_changes as filter_gitea_c
     PushHandler as GiteaPushHandler
 from biz.service.review_service import ReviewService
 from biz.utils.code_reviewer import CodeReviewer
+from biz.utils.flags import env_flag
 from biz.utils.im import notifier
 from biz.utils.log import logger
 
@@ -88,7 +89,7 @@ def _review_with_strategy(changes: list, commits_text: str, webhook_data: dict, 
 
 
 def is_llm_review_enabled() -> bool:
-    return os.environ.get('LLM_REVIEW_ENABLED', '1') == '1'
+    return env_flag(os.environ.get('LLM_REVIEW_ENABLED'), default=True)
 
 
 def handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str, gitlab_url_slug: str):

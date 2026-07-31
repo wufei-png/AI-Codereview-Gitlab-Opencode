@@ -22,10 +22,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN mkdir -p log data conf
 COPY biz ./biz
+COPY skills ./skills
+COPY opencode ./opencode
 COPY fonts ./fonts
 COPY api.py ./api.py
 COPY ui.py ./ui.py
 COPY conf/prompt_templates.yml ./conf/prompt_templates.yml
+COPY conf/agent_repos.yml ./conf/agent_repos.yml
 COPY conf/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # 暴露 Flask 和 Streamlit 的端口

@@ -20,6 +20,9 @@ openspec/
 
 # Agentic mode local repo cache
 data/repo_cache/
+data/agent-clones/
+data/agent-worktrees/
+data/agent_review_jobs.db
 
 # Test coverage artifact
 .coverage

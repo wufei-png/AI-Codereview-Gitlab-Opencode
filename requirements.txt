@@ -13,6 +13,7 @@ pathspec==0.12.1
 PyMySQL==1.1.1
 python-gitlab==5.6.0
 requests==2.32.3
+PyYAML==6.0.2
 spark-ai-python==0.4.5
 streamlit==1.42.2
 streamlit-cookies-manager==0.2.0

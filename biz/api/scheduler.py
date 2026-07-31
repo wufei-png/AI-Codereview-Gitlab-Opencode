@@ -6,9 +6,12 @@ import os
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from biz.utils.log import logger
 from biz.api.routes.daily_report import daily_report_task
+from biz.agent.config import is_agent_review_enabled, load_agent_review_config
+from biz.agent.service import reap_agent_review_workspaces
 
 
 def setup_scheduler():
@@ -32,6 +35,15 @@ def setup_scheduler():
                 day_of_week=cron_day_of_week
             )
         )
+
+        if is_agent_review_enabled():
+            lease_seconds = load_agent_review_config().job_lease_seconds
+            scheduler.add_job(
+                reap_agent_review_workspaces,
+                trigger=IntervalTrigger(seconds=max(60, lease_seconds // 2)),
+                id="agent-review-workspace-reaper",
+                replace_existing=True,
+            )
 
         # Start the scheduler
         scheduler.start()

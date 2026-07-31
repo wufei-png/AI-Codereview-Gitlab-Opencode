@@ -1,0 +1,20 @@
+# External agent review configuration.
+# repo_roots accepts either a project-group URL prefix or a complete project URL.
+# The value is the local parent/path. Local matches are preferred over cloning.
+repo_roots: {}
+allowed_remote_hosts: []
+discovery_max_depth: 3
+clone_parent: data/agent-clones
+clone_cleanup: always       # always | never | on_success
+worktree_parent: data/agent-worktrees
+shared_review_skill: skills/review-agent/SKILL.md
+backend: opencode           # opencode | codex | claude
+job_db: data/agent_review_jobs.db
+backend_timeout: 1800
+clone_timeout: 300
+job_lease_seconds: 3600
+
+# Example:
+# repo_roots:
+#   "https://gitlab.example.com/team/": "/srv/repos/team"
+#   "https://gitlab.example.com/team/payment.git": "/srv/repos/team/payment"

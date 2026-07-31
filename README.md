@@ -2,7 +2,7 @@
 
 # AI-Codereview-Gitlab-Opencode
 
-基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 OpenCode Agent Review 版本，保留原有多平台 AI Code Review 能力，并新增 OpenCode Serve backend 集成。
+基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 Agent Review 版本，保留原有多平台 AI Code Review 能力，并支持 OpenCode Serve、Codex CLI 和 Claude CLI 三种显式后端。
 
 [开源版](README.md) | 
 [Pro版](doc/pro.md)
@@ -34,10 +34,10 @@
   - 任意阶段失败（clone / fetch / LLM / 工具调用）自动降级回 `diff_only`，
     保证至少返回与原版一致的 review。
   - 详细配置与开销说明见下方 [Agentic Review Mode](#agentic-review-mode-可选)
-- 🤖 OpenCode Agent Review 集成
-  - 支持集成 OpenCode Serve API，通过 Agent 进行代码审查
-  - 当收到 PR/MR webhook 事件时，自动触发 OpenCode Agent Review
-  - 支持自定义 Agent 名称和 API 地址配置
+- 🤖 External Agent Review 集成
+  - 支持 OpenCode Serve、Codex CLI、Claude CLI，按配置明确选择一个后端
+  - 当收到 GitHub/GitLab/Gitea PR/MR webhook 事件时，自动触发 Agent Review
+  - 本地仓库优先，找不到时按配置 clone；每次执行使用一次性 worktree
   - 可与内置 LLM Review 功能并行使用或独立使用
 
 **效果图:**
@@ -93,7 +93,7 @@ DINGTALK_WEBHOOK_URL={YOUR_WDINGTALK_WEBHOOK_URL}
 GITLAB_ACCESS_TOKEN={YOUR_GITLAB_ACCESS_TOKEN}
 
 #OpenCode Agent Review配置（可选）
-#开启后webhook收到PR/MR事件时会发送请求到opencode serve的API进行review
+#兼容旧配置；新配置见“配置 External Agent Review”
 OPENCODE_ENABLED=0  # 0关闭，1开启
 OPENCODE_API_URL=http://localhost:4096  # OpenCode Serve API地址
 OPENCODE_AGENT_NAME=code-reviewer  # Agent名称
@@ -200,7 +200,7 @@ OpenCode Agent Review 是一个可选的代码审查功能，可以与内置的 
 
 #### 1. 启用 OpenCode Agent Review
 
-- 确保已部署 OpenCode Serve 服务（参考 OpenCode 官方文档），通常：`opencode web --hostname 0.0.0.0 --port 4096`
+- 确保已部署 OpenCode Serve 服务（参考 OpenCode 官方文档），例如：`opencode serve --hostname 0.0.0.0 --port 4096`
 - 更新 .env 中的配置：
   ```bash
   # OpenCode Agent Review配置
@@ -214,11 +214,64 @@ OpenCode Agent Review 是一个可选的代码审查功能，可以与内置的 
   ```
 - [opencode示例配置](./opencode)
 
+OpenCode Serve 需要能访问本服务传入的临时 job 目录；如果 OpenCode 运行在另一个容器中，请把 `worktree_parent` 映射为相同路径，或通过 `AGENT_WORKTREE_PARENT` 配置双方一致的路径。服务会把 disposable source clone 和 canonical skill 副本放入 job 目录，并生成一次性 `opencode.json`，任务结束后随 job 目录清理。
+
 #### 2. 功能说明
 
-- 当 webhook 收到 GitHub/GitLab/Gitea 的 PR/MR 事件时，如果 `OPENCODE_ENABLED=1`，系统会自动调用 OpenCode API 创建 session 并发送 review 请求
+- 当 webhook 收到 GitHub/GitLab/Gitea 的 PR/MR 事件时，如果 `OPENCODE_ENABLED=1`，系统会自动调用 OpenCode Serve API 创建 session 并发送 review 请求
 - OpenCode Review 和内置 LLM Review 可以同时启用，两者互不影响
 - 如果只需要使用 OpenCode Review，可以设置 `LLM_REVIEW_ENABLED=0` 来关闭内置 LLM Review
+
+### 配置 External Agent Review
+
+这是当前 OpenCode/CLI Agent 部分的核心入口。Webhook 路由、服务代码和 `opencode/opencode.json` 都会使用同一份审查 skill：[`skills/review-agent/SKILL.md`](skills/review-agent/SKILL.md)。它定义仓库上下文、缺陷优先审查标准、worktree 生命周期、默认自动修复和平台 CLI 交付要求；`opencode/prompts/code-reviewer_v2.md` 已删除，旧的分散提示词不再作为运行时入口。
+
+后端不自动切换，也不 fan-out。选择一个后端：
+
+```bash
+AGENT_REVIEW_ENABLED=1
+AGENT_BACKEND=opencode   # opencode | codex | claude
+AGENT_REVIEW_CONFIG=conf/agent_repos.yml
+AGENT_SHARED_REVIEW_SKILL_PATH=  # 可选，覆盖共享 skill 绝对路径
+```
+
+`OPENCODE_ENABLED=1` 仍可作为旧配置的兼容开关，但它只负责选择 OpenCode 后端；启用 External Agent 后仍必须配置 webhook secret/signature 校验，不能用旧开关绕过认证。显式设置 `AGENT_REVIEW_ENABLED` 后以它为准。Codex/Claude 后端分别调用本机 `codex exec` / `claude -p`，OpenCode 后端调用 OpenCode Serve API。项目不负责安装 CLI、登录、创建 token 或维护认证状态；运行前请自行完成对应 CLI 的认证，GitLab/GitHub/Gitea 交付由 skill 指示 Agent 使用 `glab` / `gh` / 对应原生 CLI 完成，不使用 MCP。
+
+运行进程必须能在 `PATH` 中找到所选 CLI；默认 Docker 镜像只提供 Git 和项目依赖，不替用户安装 Codex/Claude/OpenCode 或其认证环境。如在 Docker 中选择 `codex` 或 `claude`，请使用自己的派生镜像安装对应 CLI。
+
+安全边界说明：External Agent 是被信任的执行者，当前集成用进程参数、临时 job 目录和 disposable source clone 限制正常路径，但不会伪造 Claude/Codex/OpenCode 的 OS 级沙箱。Agent 为了使用已认证的 `glab` / `gh` / Gitea CLI，可能继承操作者提供的 CLI 配置、Git credential helper 或 SSH agent；请在专用低权限用户、容器或仅挂载 job workspace 的 worker 中运行，不要让不可信仓库使用宿主机高权限凭据。项目不负责创建、登录、刷新或托管这些凭据。
+
+当本地 `repo_roots` 没有匹配而需要 clone 私有仓库时，Git clone 还必须具备独立的 Git 凭据：可使用 Webhook 提供的 SSH remote/本机 SSH agent、Git credential helper，或配置 `GITHUB_ACCESS_TOKEN` / `GITLAB_ACCESS_TOKEN` / `GITEA_ACCESS_TOKEN`。`gh`/`glab` 登录状态本身不保证 Git 已配置 credential helper；本项目不读取 CLI 配置、不提取 token，也不负责登录过程。配置本地 `repo_roots` 可以完全绕过这一步。
+
+如果只启用 External Agent Review，可同时设置 `LLM_REVIEW_ENABLED=0`；此时 Webhook 不要求项目配置 GitHub/GitLab/Gitea API token，平台操作由已认证的 CLI 完成。若保留内置 LLM Review，则仍需按原有配置提供对应平台 token。
+
+启用 External Agent Review 后，Webhook 必须配置对应的 `GITHUB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_SECRET` 或 `GITEA_WEBHOOK_SECRET`，服务会校验 GitLab token header 或 GitHub/Gitea HMAC 签名；GitLab Standard Webhooks 还可配置 `GITLAB_WEBHOOK_SIGNING_TOKEN` 校验 `webhook-id`/`webhook-timestamp`/`webhook-signature`。未通过校验不会创建 Agent Job。不要把平台 API token 当作新的 webhook secret 使用；旧 access token 回退只有显式设置 `AGENT_ALLOW_ACCESS_TOKEN_WEBHOOK_FALLBACK=1` 才启用。
+
+仓库发现与临时目录由 `conf/agent_repos.yml` 控制：
+
+```yaml
+repo_roots:
+  "https://gitlab.example.com/team/": "/srv/repos/team"
+  # 也可以直接配置完整项目 URL：
+  # "https://gitlab.example.com/team/payment.git": "/srv/repos/team/payment"
+discovery_max_depth: 3
+allowed_remote_hosts: [gitlab.example.com]
+clone_parent: data/agent-clones
+clone_cleanup: always       # always | never | on_success
+worktree_parent: data/agent-worktrees
+shared_review_skill: skills/review-agent/SKILL.md
+backend: opencode
+```
+
+`allowed_remote_hosts` 非空时是严格白名单；未填写时才从 `repo_roots`、`GITLAB_URL`、`GITHUB_URL` 和 `GITEA_URL` 推导默认主机。若请求包含 fork，source、target 和 review URL 的主机都必须通过白名单。
+
+系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。Agent 自己在独立 `worktree_parent` 子目录中选择 worktree 路径和分支细节；worktree 固定清理，clone 默认也清理，可用 `clone_cleanup` 保留。服务在 Agent 运行前 fetch 源分支最新远程 revision，因此审查的是任务执行时的最新代码，而非可能已过时的 webhook SHA。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
+
+自动修复默认开启，规则位于共享 skill 的 `## Auto-fix policy (enabled by default)`。如果只想审查、不自动修复，删除 skill 中这一整段即可；这是当前最简单的开关。
+
+默认配置还包括：`AGENT_DISCOVERY_MAX_DEPTH`、`AGENT_ALLOWED_REMOTE_HOSTS`、`AGENT_CLONE_PARENT`、`AGENT_CLONE_CLEANUP`、`AGENT_WORKTREE_PARENT`、`AGENT_BACKEND_TIMEOUT`、`AGENT_CLONE_TIMEOUT`、`AGENT_JOB_LEASE_SECONDS` 和 `AGENT_JOB_DB`。Webhook 使用 SQLite job store 对同一个 provider/review/action/revision 做幂等，失败任务允许后续重新投递重试；崩溃后超过 lease 的 job 会回收其受控 workspace 并重新执行。
+
+Lease heartbeat 和 token fencing 会阻止正常的过期任务继续更新 job 状态；若宿主进程本身失联但其外部 Agent 子进程仍未退出，无法从 SQLite 中撤销已经发出的平台 CLI/OpenCode 网络副作用。生产部署应使用 backend timeout、专用 worker 和平台侧幂等/人工检查处理这一极端残余风险。
 
 ## 常见问题
 

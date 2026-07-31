@@ -37,7 +37,7 @@ def _pick_token_for_host(host: str | None) -> str | None:
     return os.getenv("GITLAB_ACCESS_TOKEN")
 
 
-def _auth_url(url: str) -> str:
+def _auth_url(url: str, *, provider: str | None = None) -> str:
     """Return ``url`` with credentials injected based on its host.
 
     No-op for non-HTTPS URLs, already-credentialed URLs, or when no
@@ -52,7 +52,15 @@ def _auth_url(url: str) -> str:
     host = parsed.hostname
     if not host:
         return url
-    token = _pick_token_for_host(host)
+    if provider:
+        token_name = {
+            "github": "GITHUB_ACCESS_TOKEN",
+            "gitlab": "GITLAB_ACCESS_TOKEN",
+            "gitea": "GITEA_ACCESS_TOKEN",
+        }.get(provider.lower())
+        token = os.getenv(token_name) if token_name else None
+    else:
+        token = _pick_token_for_host(host)
     if not token:
         return url
     userinfo = f"oauth2:{quote(token, safe='')}"

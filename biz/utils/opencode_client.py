@@ -5,6 +5,7 @@ OpenCode Serve API 客户端
 
 import os
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -114,7 +115,14 @@ def send_opencode_review(mr_url: str):
 
     api_url = os.environ.get("OPENCODE_API_URL", "http://localhost:4096")
     agent_name = os.environ.get("OPENCODE_AGENT_NAME", "code-reviewer")
-    review_message = f"review this mr: {mr_url}"
+    skill_path = os.environ.get(
+        "AGENT_SHARED_REVIEW_SKILL_PATH",
+        str(Path(__file__).resolve().parents[2] / "skills" / "review-agent" / "SKILL.md"),
+    )
+    review_message = (
+        f"Read and follow the canonical review skill at {skill_path}. "
+        f"review this mr: {mr_url}"
+    )
 
     # 准备认证信息（如果配置了密码）
     auth = None

@@ -17,10 +17,18 @@ from biz.queue.worker import (
     handle_gitea_push_event,
 )
 from biz.utils.log import logger
-from biz.utils.opencode_client import is_opencode_enabled, send_opencode_review
-from biz.utils.task_queue import handle_queue, handle_opencode_queue
+from biz.agent.config import is_agent_review_enabled
+from biz.agent.service import dispatch_agent_review
+from biz.utils.flags import env_flag
+from biz.utils.task_queue import handle_agent_queue, handle_queue
+from biz.utils.webhook_security import verify_webhook
 
 webhook_bp = Blueprint("webhook", __name__)
+
+
+def _builtin_review_enabled() -> bool:
+    """Platform API tokens are only required by the legacy built-in reviewer."""
+    return env_flag(os.environ.get("LLM_REVIEW_ENABLED"), default=True)
 
 
 @webhook_bp.route("/review/webhook", methods=["POST"])
@@ -30,6 +38,15 @@ def handle_webhook():
     """
     # 获取请求的JSON数据
     if request.is_json:
+        if is_agent_review_enabled():
+            if request.headers.get("X-Gitea-Event"):
+                provider = "gitea"
+            elif request.headers.get("X-GitHub-Event"):
+                provider = "github"
+            else:
+                provider = "gitlab"
+            if not verify_webhook(provider, request.headers, request.get_data(cache=True)):
+                return jsonify({"error": "Invalid webhook signature or secret"}), 401
         data = request.get_json()
         if not data:
             return jsonify({"error": "Invalid JSON"}), 400
@@ -56,7 +73,7 @@ def handle_github_webhook(event_type, data):
     github_token = os.getenv("GITHUB_ACCESS_TOKEN") or request.headers.get(
         "X-GitHub-Token"
     )
-    if not github_token:
+    if not github_token and _builtin_review_enabled():
         return jsonify({"message": "Missing GitHub access token"}), 400
 
     github_url = os.getenv("GITHUB_URL") or "https://github.com"
@@ -67,14 +84,9 @@ def handle_github_webhook(event_type, data):
     logger.info(f"Payload: {json.dumps(data)}")
 
     if event_type == "pull_request":
-        # 异步触发 OpenCode Agent Review（如果启用）
-        if is_opencode_enabled():
-            pr_url = data.get("pull_request", {}).get("html_url")
-            if pr_url:
-                logger.info(
-                    f"[OpenCode] GitHub PR webhook received, triggering OpenCode review for {pr_url}."
-                )
-                handle_opencode_queue(send_opencode_review, pr_url)
+        # 异步触发显式配置的外部 Agent backend。
+        if is_agent_review_enabled():
+            handle_agent_queue(dispatch_agent_review, "github", data)
         
         # 使用handle_queue进行异步处理
         handle_queue(
@@ -133,7 +145,7 @@ def handle_gitlab_webhook(data):
         "X-Gitlab-Token"
     )
     # 如果gitlab_token为空，返回错误
-    if not gitlab_token:
+    if not gitlab_token and _builtin_review_enabled():
         return jsonify({"message": "Missing GitLab access token"}), 400
 
     gitlab_url_slug = slugify_url(gitlab_url)
@@ -144,14 +156,9 @@ def handle_gitlab_webhook(data):
 
     # 处理Merge Request Hook
     if object_kind == "merge_request":
-        # 异步触发 OpenCode Agent Review（如果启用）
-        if is_opencode_enabled():
-            mr_url = data.get("object_attributes", {}).get("url")
-            if mr_url:
-                logger.info(
-                    f"[OpenCode] GitLab MR webhook received, triggering OpenCode review for {mr_url}."
-                )
-                handle_opencode_queue(send_opencode_review, mr_url)
+        # 异步触发显式配置的外部 Agent backend。
+        if is_agent_review_enabled():
+            handle_agent_queue(dispatch_agent_review, "gitlab", data, gitlab_url=gitlab_url)
         
         # 创建一个新进程进行异步处理
         handle_queue(
@@ -186,7 +193,7 @@ def handle_gitea_webhook(event_type, data):
     gitea_token = os.getenv("GITEA_ACCESS_TOKEN") or request.headers.get(
         "X-Gitea-Token"
     )
-    if not gitea_token:
+    if not gitea_token and _builtin_review_enabled():
         return jsonify({"message": "Missing Gitea access token"}), 400
 
     gitea_url = os.getenv("GITEA_URL") or "https://gitea.com"
@@ -196,14 +203,9 @@ def handle_gitea_webhook(event_type, data):
     logger.info(f"Payload: {json.dumps(data)}")
 
     if event_type == "pull_request":
-        # 异步触发 OpenCode Agent Review（如果启用）
-        if is_opencode_enabled():
-            pr_url = data.get("pull_request", {}).get("html_url") or data.get("pull_request", {}).get("url")
-            if pr_url:
-                logger.info(
-                    f"[OpenCode] Gitea PR webhook received, triggering OpenCode review for {pr_url}."
-                )
-                handle_opencode_queue(send_opencode_review, pr_url)
+        # 异步触发显式配置的外部 Agent backend。
+        if is_agent_review_enabled():
+            handle_agent_queue(dispatch_agent_review, "gitea", data)
         
         handle_queue(
             handle_gitea_pull_request_event,
