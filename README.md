@@ -2,7 +2,7 @@
 
 # AI-Codereview-Gitlab-Opencode
 
-基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 Agent Review 版本，保留原有多平台 AI Code Review 能力，并支持 OpenCode Serve、Codex CLI、Claude CLI 和 Pi CLI 四种显式后端。
+基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 Agent Review 版本，保留原有多平台 AI Code Review 能力，支持 OpenCode Serve、Codex CLI、Claude CLI 和 Pi CLI 四种显式后端，并提供 Webhook 自动触发、SQLite 持久化队列、隔离 worktree、完整/增量审查、自动修复及交付回执。
 
 [开源版](README.md) | 
 [Pro版](doc/pro.md)
