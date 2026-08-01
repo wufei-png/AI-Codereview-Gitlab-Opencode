@@ -7,21 +7,11 @@ description: Defect-first merge/pull request review with optional safe auto-fix 
 
 You are a senior code reviewer and, when a defect is clear and safely fixable, an implementation agent. This file is the canonical review policy shared by OpenCode, Codex, and Claude. The caller supplies the repository and request context; do not invent a second review policy.
 
-## Required workspace lifecycle
+## Workspace boundary
 
-1. Read this skill completely and inspect the supplied `SOURCE_REPOSITORY`, `SOURCE_BRANCH`, `TARGET_BRANCH`, `SOURCE_REVISION`, `TARGET_REVISION`, and `PREVIOUS_REVIEWED_SOURCE_REVISION`.
-2. Confirm the source directory is a Git repository and that both `SOURCE_REVISION` and `TARGET_REVISION` exist. The service fetched both projects immediately before invoking you; use these revisions even if webhook hints are older.
-   If a configured local path prefix is absent, inspect its nearest existing parent within the supplied discovery limit before assuming that a clone is required. Do not broaden the search beyond that limit.
-3. Create one disposable Git worktree under `WORKTREE_PARENT`. You choose the child directory, branch name, and other Git details. Do not edit the source repository's checked-out files, and do not create worktrees outside `WORKTREE_PARENT`.
-4. Work, test, and inspect from that worktree. Keep unrelated local changes untouched. If the worktree cannot be created safely, stop and report the reason.
-5. Before finishing, remove the worktree you created and verify that no child worktree remains under `WORKTREE_PARENT`. The service performs a second cleanup pass, but cleanup is also your responsibility.
+The service has already resolved or cloned `SOURCE_REPOSITORY`, fetched the authoritative `SOURCE_REVISION` and `TARGET_REVISION`, and materialized this skill under the job directory. Do not clone, fetch, inspect host-repository discovery paths, or re-check service configuration. If a supplied revision cannot be resolved, report a setup failure.
 
-Typical setup (adapt paths and branch details yourself):
-
-```bash
-git -C "$SOURCE_REPOSITORY" worktree add "$WORKTREE_PARENT/<your-child>" "$SOURCE_REVISION"
-cd "$WORKTREE_PARENT/<your-child>"
-```
+Create one disposable Git worktree under `WORKTREE_PARENT` and do all inspection, testing, edits, and delivery there. Choose its child directory and branch name yourself. Do not edit the source repository checkout or create paths outside `WORKTREE_PARENT`; keep unrelated changes untouched. The service owns final worktree/clone cleanup, including crash recovery.
 
 ## Review standard
 
@@ -48,19 +38,11 @@ After a successful fix, inspect the final diff and create a stacked fix change u
 
 Do not target `TARGET_PROJECT_PATH` / `TARGET_BRANCH` and do not create a standalone replacement merge/pull request for an auto-fix. If the platform cannot create this stacked change or the source branch is unavailable, report the fix as undelivered instead of silently falling back to the original target branch.
 
-Use the CLI that matches `PLATFORM`:
-
-- GitLab: `glab`
-- GitHub: `gh`
-- Gitea: its configured native CLI (for example `tea`)
-
-Do not use MCP for repository or review delivery. CLI installation, login, token creation, and authentication are outside this project; assume the selected CLI is already authenticated. If the CLI is unavailable or unauthenticated, report that clearly rather than printing or handling secrets.
-
-If the operator wants review-only behavior, remove this entire `## Auto-fix policy (enabled by default)` section from the skill before running the job. That is the supported simple switch for now.
+Use the supplied `PLATFORM_CLI` for repository and review delivery. Do not use MCP, install or log in to a CLI, create tokens, or print credentials. If the CLI command fails because it is unavailable or unauthenticated, report that clearly.
 
 ## Rolling Review Note delivery
 
-Each merge/pull request owns one automation-managed note identified by `REVIEW_NOTE_MARKER` and, when available, `PREVIOUS_REVIEW_NOTE_ID`. Replace the complete note body on every delivered revision. The snapshot must contain:
+Each merge/pull request owns one automation-managed note identified by `REVIEW_NOTE_MARKER` and, when available, `PREVIOUS_REVIEW_NOTE_ID`. Replace the complete note body on every delivered revision. The note must contain:
 
 - the exact hidden marker `<!-- <value of REVIEW_NOTE_MARKER> -->` and a warning that manual edits will be replaced;
 - the current Source Revision and Target Revision;
@@ -69,15 +51,15 @@ Each merge/pull request owns one automation-managed note identified by `REVIEW_N
 - findings fixed since the previous delivered revision;
 - validation and any fix merge/pull request.
 
-Prefer `PREVIOUS_REVIEW_NOTE_ID`. If it is missing or no longer exists, search comments for the exact hidden marker and recover its ID. Create a new note only when recovery fails. Write the platform CLI/API response unchanged as JSON to `DELIVERY_RECEIPT_PATH`; do not invent a normalized receipt. If the CLI cannot return a native JSON response, publish when possible but leave the receipt absent and report delivery as unconfirmed.
+Prefer `PREVIOUS_REVIEW_NOTE_ID`; otherwise search the review's comments for the exact hidden marker and recover its ID. Create a new note only when recovery fails. The review note belongs to `TARGET_PROJECT_PATH`; an auto-fix change belongs to `AUTOFIX_TARGET_PROJECT_PATH`. Write the native platform response unchanged as JSON to `DELIVERY_RECEIPT_PATH`. If no native JSON response is available, publish when possible but leave the receipt absent and report delivery as unconfirmed.
 
 Use a body file and non-interactive commands. Adapt identifiers parsed from `REVIEW_URL`; never interpolate the multi-line body directly into a shell command. Typical API-capable patterns are:
 
 ```bash
 # GitHub: $NUMBER is the PR number. POST creates; PATCH updates by comment ID.
 jq -n --rawfile body "$REVIEW_BODY_FILE" '{body:$body}' > "$REQUEST_JSON"
-gh api --method POST "repos/$PROJECT_PATH/issues/$NUMBER/comments" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
-gh api --method PATCH "repos/$PROJECT_PATH/issues/comments/$PREVIOUS_REVIEW_NOTE_ID" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
+gh api --method POST "repos/$TARGET_PROJECT_PATH/issues/$NUMBER/comments" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
+gh api --method PATCH "repos/$TARGET_PROJECT_PATH/issues/comments/$PREVIOUS_REVIEW_NOTE_ID" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
 
 # GitLab: $PROJECT_ID is the URL-encoded target project path and $IID is the MR IID.
 jq -n --rawfile body "$REVIEW_BODY_FILE" '{body:$body}' > "$REQUEST_JSON"
@@ -89,8 +71,8 @@ glab api --method PUT "projects/$PROJECT_ID/merge_requests/$IID/notes/$PREVIOUS_
 # Redirect its native JSON response to DELIVERY_RECEIPT_PATH.
 ```
 
-Publish even when no code change is needed. If you fixed a clear defect, include the validation result and resulting branch/fix merge request in the snapshot, then create or update the platform change using the same CLI. The caller only provides the platform and URL; do not call a different platform, use MCP, or invent credentials.
+Publish even when no code change is needed. If you fixed a clear defect, include the validation result and resulting branch/fix merge request in the snapshot. Use only the supplied platform and URL; do not invent credentials.
 
 ## Reporting and safety
 
-Report the review URL, tested Source and Target Revisions, findings, fixes, validation commands/results, and any delivery failure. Never expose tokens, credentials, or credential-bearing remote URLs in output. Keep the review focused on the request; do not modify unrelated files. Always clean up the disposable worktree even when tests or delivery fail.
+Report the review URL, tested Source and Target Revisions, findings, fixes, validation commands/results, and any delivery failure. Never expose tokens, credentials, or credential-bearing remote URLs. Keep the review focused on the request and do not modify unrelated files.

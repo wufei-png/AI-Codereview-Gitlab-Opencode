@@ -140,7 +140,11 @@ def test_build_prompt_exposes_stacked_autofix_target_for_fork(tmp_path):
     assert "- AUTOFIX_TARGET_REMOTE_URL: https://gitlab.example.com/fork/payment.git" in prompt
     assert "- AUTOFIX_TARGET_BRANCH: feature" in prompt
     assert "- AUTOFIX_BASE_REVISION: source-sha" in prompt
-    assert "Do not target TARGET_PROJECT_PATH/TARGET_BRANCH" in prompt
+    assert "- SERVICE_PREPARED_WORKSPACE: true" in prompt
+    assert "Do not target TARGET_PROJECT_PATH/TARGET_BRANCH" not in prompt
+    assert "CLONE_PARENT:" not in prompt
+    assert "DISCOVERY_MAX_DEPTH:" not in prompt
+    assert "Create your own disposable git worktree" not in prompt
 
 
 def test_shared_skill_requires_stacked_autofix_target():
@@ -150,6 +154,8 @@ def test_shared_skill_requires_stacked_autofix_target():
     assert "AUTOFIX_TARGET_PROJECT_PATH" in text
     assert "AUTOFIX_TARGET_BRANCH" in text
     assert "Do not target `TARGET_PROJECT_PATH` / `TARGET_BRANCH`" in text
+    assert "repos/$TARGET_PROJECT_PATH/issues/" in text
+    assert "repos/$PROJECT_PATH/issues/" not in text
 
 
 def test_job_store_skips_completed_and_allows_failed_retry(tmp_path):

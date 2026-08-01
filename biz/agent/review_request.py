@@ -202,11 +202,7 @@ The service has already resolved the repository and fetched the latest remote so
 - REVIEW_NOTE_MARKER: {request.review_marker}
 - DELIVERY_RECEIPT_PATH: {job_root}/.agent-delivery-receipt.json
 - WORKTREE_PARENT: {job_root}
-- CLONE_PARENT: {config.clone_parent}
-- CLONE_CLEANUP: configured policy is {config.clone_cleanup}; Review Worktrees are always removed
-- DISCOVERY_MAX_DEPTH: {config.discovery_max_depth}
+- SERVICE_PREPARED_WORKSPACE: true; SOURCE_REPOSITORY already contains the fetched authoritative revisions. Do not clone, fetch, or inspect host-repository discovery paths.
 
-Create your own disposable git worktree under WORKTREE_PARENT, choose its child directory and branch details yourself, and do all inspection, review, edits, tests, and platform delivery from that worktree. Review the complete diff from merge-base(TARGET_REVISION, SOURCE_REVISION) to SOURCE_REVISION. Use PREVIOUS_REVIEWED_SOURCE_REVISION only for reporting emphasis. Do not modify the source repository's checked-out files. The service removes the worktree and temporary clone after this run.
-
-When the shared skill permits an auto-fix, create a stacked fix change: base the fix branch on AUTOFIX_BASE_REVISION and target AUTOFIX_TARGET_PROJECT_PATH/AUTOFIX_TARGET_BRANCH. Do not target TARGET_PROJECT_PATH/TARGET_BRANCH or create a standalone replacement change. For fork requests, the fix target remains the original source project and source branch.
+Read the canonical skill for the Agent-owned worktree, review, auto-fix, and delivery procedure. If a supplied revision cannot be resolved, report a setup failure. Do not modify paths outside WORKTREE_PARENT.
 """
