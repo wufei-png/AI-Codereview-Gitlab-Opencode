@@ -279,7 +279,7 @@ backend: opencode
 
 默认 `AGENT_BACKEND_TIMEOUT=-1`，只表示 Agent 执行不限时；clone/fetch、OpenCode 会话建立和清理仍有独立正数 timeout。其他配置包括 `AGENT_WORKER_CONCURRENCY`、`AGENT_WORKER_SHUTDOWN_GRACE`、`AGENT_JOB_RETENTION_DAYS` 和可选的 `AGENT_RESULT_MAX_BYTES`。结果默认不限制大小；显式设置上限后保留头尾并记录截断。Job/结果默认保留 90 天。
 
-SQLite queue 在 webhook hints 和实际 fetch 后的 source/target revision 两层做幂等。Agent 启动前的临时基础设施失败最多指数退避重试三次；Agent 一旦启动就不自动重试，避免重复交付。Execution Status 与 Delivery Status 分离：backend 退出 0 得到 `completed`，只有有效的平台原生 delivery receipt 才得到 `confirmed`。
+SQLite queue 在 webhook hints 和实际 fetch 后的 source/target revision 两层做幂等。Agent 启动前的临时基础设施失败最多指数退避重试三次；Agent 一旦启动就不自动重试，避免重复交付。Execution Status 与 Delivery Status 分离：backend 退出 0 得到 `completed`，只有有效的平台原生 delivery receipt，或唯一 marker reconciliation 生成的 provider-native receipt，才得到 `confirmed`；纯文本“评论成功”不会直接推进 rolling history。
 
 Lease heartbeat 和 token fencing 会阻止正常的过期任务继续更新 job 状态；若宿主进程本身失联但其外部 Agent 子进程仍未退出，无法从 SQLite 中撤销已经发出的平台 CLI/OpenCode 网络副作用。生产部署应使用 backend timeout、专用 worker 和平台侧幂等/人工检查处理这一极端残余风险。
 

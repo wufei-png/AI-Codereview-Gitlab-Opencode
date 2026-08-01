@@ -21,8 +21,12 @@ Review Job 的服务侧生命周期状态，只使用 `queued`、`running`、`co
 _Avoid_: agent verdict, delivery status
 
 **Delivery Status**:
-Rolling Review Note 的服务侧确认状态，只使用 `not_attempted`、`confirmed` 和 `unconfirmed`。只有有效的平台原生 delivery receipt 才能得到 `confirmed`，即使 Agent Backend 随后失败或超时也一样；它不改变 Execution Status。
+Rolling Review Note 的服务侧确认状态，只使用 `not_attempted`、`confirmed` 和 `unconfirmed`。只有有效的平台原生 delivery receipt，或 Delivery Reconciliation 证明恰好一个当前 automation-owned note 并生成 provider-native receipt，才能得到 `confirmed`，即使 Agent Backend 随后失败或超时也一样；它不改变 Execution Status。
 _Avoid_: execution status, inferred delivery success
+
+**Delivery Reconciliation**:
+当平台 CLI 的发布命令没有返回可解析的原生 JSON 时，Agent 按 Review Note 的确定性隐藏 marker 查询目标 review 的 notes，并要求结果恰好唯一且属于当前快照；将匹配到的平台对象作为 receipt 证据。零匹配、多匹配、缺少 note ID 或无法确认当前快照时保持 `unconfirmed`，不能用“评论成功”等纯文本推断已确认。
+_Avoid_: synthetic success receipt, ambiguous marker match
 
 **Backend Timeout**:
 只约束 Agent Backend 执行阶段的墙钟时限；默认 `-1` 表示不限制，只有显式配置正数时才启用。Git 准备、OpenCode 会话建立和清理使用各自独立的正数时限。
@@ -45,7 +49,7 @@ _Avoid_: target branch name, fork-local base
 _Avoid_: review base, target revision
 
 **Rolling Review Note**:
-每个 merge/pull request 由 Agent 创建并持续更新的一条 automation-owned 审查 note。它是当前状态快照，包含当前 revision、本轮新增或变化、仍未解决和已修复的 finding，而不是无限追加的历史记录。finding 使用 `F001` 一类稳定键辅助跨 revision 状态匹配。note 携带确定性隐藏标记；服务保存平台原生 delivery receipt 并提取 note ID，必要时由 Agent 按标记恢复。人工编辑会在下一轮被完整覆盖。
+每个 merge/pull request 由 Agent 创建并持续更新的一条 automation-owned 审查 note。它是当前状态快照，包含当前 revision、本轮新增或变化、仍未解决和已修复的 finding，而不是无限追加的历史记录。finding 使用 `F001` 一类稳定键辅助跨 revision 状态匹配。note 携带确定性隐藏标记；服务保存平台原生 delivery receipt 并提取 note ID，必要时由 Agent 按标记恢复或执行 Delivery Reconciliation。人工编辑会在下一轮被完整覆盖。
 _Avoid_: review history log, one note per revision
 
 **Agent-owned delivery**:

@@ -51,9 +51,9 @@ Each merge/pull request owns one automation-managed note identified by `REVIEW_N
 - findings fixed since the previous delivered revision;
 - validation and any fix merge/pull request.
 
-Prefer `PREVIOUS_REVIEW_NOTE_ID`; otherwise search the review's comments for the exact hidden marker and recover its ID. Create a new note only when recovery fails. The review note belongs to `TARGET_PROJECT_PATH`; an auto-fix change belongs to `AUTOFIX_TARGET_PROJECT_PATH`. Write the native platform response unchanged as JSON to `DELIVERY_RECEIPT_PATH`. If no native JSON response is available, publish when possible but leave the receipt absent and report delivery as unconfirmed.
+Prefer `PREVIOUS_REVIEW_NOTE_ID`; otherwise search the review's comments for the exact hidden marker and recover its ID. Create a new note only when recovery fails. The review note belongs to `TARGET_PROJECT_PATH`; an auto-fix change belongs to `AUTOFIX_TARGET_PROJECT_PATH`. Write the native platform response unchanged as JSON to `DELIVERY_RECEIPT_PATH`. Delivery Reconciliation means that, when the publish command returns only plain text, you query the target review's notes/comments for the exact hidden marker. Require exactly one match for the current review snapshot, with a note ID and URL, then write that matched provider-native object unchanged to `DELIVERY_RECEIPT_PATH`. If the query returns zero or multiple matches, or cannot establish the current snapshot, leave the receipt absent and report delivery as unconfirmed. Never turn a text such as `评论成功！` into a synthetic success receipt.
 
-Use a body file and non-interactive commands. Adapt identifiers parsed from `REVIEW_URL`; never interpolate the multi-line body directly into a shell command. Typical API-capable patterns are:
+Use a body file and non-interactive commands. Adapt identifiers parsed from `REVIEW_URL`; never interpolate the multi-line body directly into a shell command. Keep shell snippets portable across the worker's shells: use a name such as `exit_code` for command results and do not assign to zsh-reserved names such as `status`. Typical API-capable patterns are:
 
 ```bash
 # GitHub: $NUMBER is the PR number. POST creates; PATCH updates by comment ID.
@@ -66,9 +66,12 @@ jq -n --rawfile body "$REVIEW_BODY_FILE" '{body:$body}' > "$REQUEST_JSON"
 glab api --method POST "projects/$PROJECT_ID/merge_requests/$IID/notes" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
 glab api --method PUT "projects/$PROJECT_ID/merge_requests/$IID/notes/$PREVIOUS_REVIEW_NOTE_ID" --input "$REQUEST_JSON" > "$DELIVERY_RECEIPT_PATH"
 
-# Gitea: use the configured authenticated native CLI/API command for
+# Gitea/Gitee: use the configured authenticated native CLI/API command for
 # /repos/{owner}/{repo}/issues/{index}/comments and /issues/comments/{id}.
-# Redirect its native JSON response to DELIVERY_RECEIPT_PATH.
+# If the CLI returns plain text, query the provider's pull-request comments
+# API, filter the exact marker, require exactly one current match, and write
+# that provider-native JSON object to DELIVERY_RECEIPT_PATH. Do not treat a
+# plain-text success message as a receipt.
 ```
 
 Publish even when no code change is needed. If you fixed a clear defect, include the validation result and resulting branch/fix merge request in the snapshot. Use only the supplied platform and URL; do not invent credentials.

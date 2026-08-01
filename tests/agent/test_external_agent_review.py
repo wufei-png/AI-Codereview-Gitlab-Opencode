@@ -156,6 +156,10 @@ def test_shared_skill_requires_stacked_autofix_target():
     assert "Do not target `TARGET_PROJECT_PATH` / `TARGET_BRANCH`" in text
     assert "repos/$TARGET_PROJECT_PATH/issues/" in text
     assert "repos/$PROJECT_PATH/issues/" not in text
+    assert "zsh-reserved names such as `status`" in text
+    assert "exactly one match" in text
+    assert "Delivery Reconciliation" in text
+    assert "plain-text success message" in text
 
 
 def test_job_store_skips_completed_and_allows_failed_retry(tmp_path):
