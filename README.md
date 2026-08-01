@@ -235,7 +235,7 @@ AGENT_REVIEW_CONFIG=conf/agent_repos.yml
 AGENT_SHARED_REVIEW_SKILL_PATH=  # 可选，覆盖共享 skill 绝对路径
 ```
 
-`OPENCODE_ENABLED=1` 仍可作为旧配置的兼容开关；启用 External Agent 后仍必须配置 webhook secret/signature 校验。显式设置 `AGENT_REVIEW_ENABLED` 后以它为准。Codex、Claude、Pi 后端分别调用本机 `codex exec`、`claude -p`、`pi --print`，OpenCode 后端调用 OpenCode Serve API。项目不负责安装 CLI、登录、创建 token 或维护认证/授权状态；运行前请自行完成对应 Agent CLI 和平台 CLI 的配置，平台交付由 canonical skill 指示 Agent 使用 `glab`、`gh`、`tea` 或配置的平台等价命令完成，不使用 MCP。
+`OPENCODE_ENABLED=1` 仍可作为旧配置的兼容开关；启用 External Agent 后仍必须配置 webhook secret/signature 校验。显式设置 `AGENT_REVIEW_ENABLED` 后以它为准。Codex、Claude、Pi 后端分别调用本机 `codex exec`、`claude -p`、`pi --print`，OpenCode 后端调用 OpenCode Serve API。项目不负责安装 CLI、登录、创建 token 或维护认证/授权状态；运行前请在所选 backend 的实际执行环境中完成对应 Agent CLI 和平台 CLI 配置——本地 backend 是 worker 环境，OpenCode 是 Serve 环境。平台交付由 canonical skill 指示 Agent 使用 `glab`、`gh`、`tea` 或配置的平台等价命令完成，不使用 MCP。
 
 Webhook 只把规范化任务写入 SQLite durable queue，不在 Web 进程中启动 Agent。至少启动一个独立 worker：
 

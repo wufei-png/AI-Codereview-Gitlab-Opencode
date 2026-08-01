@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import json
+import signal
 import sqlite3
 import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from biz.agent.backends import ClaudeCliBackend, CodexCliBackend, OpenCodeServeBackend, PiCliBackend
+from biz.agent.backends import (
+    BackendExecutionError,
+    ClaudeCliBackend,
+    CodexCliBackend,
+    OpenCodeServeBackend,
+    PiCliBackend,
+    reset_backend_shutdown,
+    terminate_active_backends,
+)
 from biz.agent.config import AgentReviewConfig, load_agent_review_config
 from biz.agent.job_store import AgentJobStore
 from biz.agent.review_request import AgentReviewRequest, from_webhook
@@ -218,18 +229,123 @@ def test_opencode_backend_passes_job_directory_to_both_requests(tmp_path):
     created = MagicMock()
     created.raise_for_status.return_value = None
     created.json.return_value = {"id": "session-1"}
-    message = MagicMock()
-    message.raise_for_status.return_value = None
-    message.text = "done"
-    with patch("biz.agent.backends.requests.post", side_effect=[created, message]) as post:
+    accepted = MagicMock()
+    accepted.raise_for_status.return_value = None
+    statuses = MagicMock()
+    statuses.raise_for_status.return_value = None
+    statuses.json.return_value = {"session-1": {"type": "idle"}}
+    messages = MagicMock()
+    messages.raise_for_status.return_value = None
+    messages.json.return_value = [{
+        "info": {"role": "assistant", "time": {"completed": 1}},
+        "parts": [{"type": "text", "text": "done"}],
+    }]
+    with patch("biz.agent.backends.requests.post", side_effect=[created, accepted]) as post, patch(
+        "biz.agent.backends.requests.get", side_effect=[statuses, messages]
+    ):
         result = OpenCodeServeBackend().run(prompt="review", job_root=tmp_path, source_repo=tmp_path, config=config)
     assert result.session_id == "session-1"
     assert post.call_args_list[0].kwargs["params"] == {"directory": str(tmp_path)}
     assert post.call_args_list[1].kwargs["params"] == {"directory": str(tmp_path)}
+    assert post.call_args_list[1].args[0].endswith("/session/session-1/prompt_async")
     assert post.call_args_list[1].kwargs["json"]["agent"] == "code-reviewer"
+    assert json.loads(result.output)["parts"][0]["text"] == "done"
     materialized = json.loads((tmp_path / "opencode.json").read_text(encoding="utf-8"))
     assert str(tmp_path / ".agent-skill" / "SKILL.md") in materialized["agent"]["code-reviewer"]["prompt"]
     assert (tmp_path / "prompts" / "docs-searcher.md").exists()
+
+
+def test_opencode_unlimited_execution_can_be_aborted_on_shutdown(tmp_path):
+    config = AgentReviewConfig(
+        opencode_api_url="http://opencode:4096", backend_timeout=-1,
+        opencode_session_timeout=1,
+    )
+    created = MagicMock()
+    created.raise_for_status.return_value = None
+    created.json.return_value = {"id": "session-1"}
+    accepted = MagicMock()
+    accepted.raise_for_status.return_value = None
+    aborted = MagicMock()
+    aborted.raise_for_status.return_value = None
+
+    def get_control(url, **_kwargs):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = (
+            {"session-1": {"type": "busy"}} if url.endswith("/session/status") else []
+        )
+        return response
+
+    errors = []
+
+    def run_backend():
+        try:
+            OpenCodeServeBackend().run(
+                prompt="review", job_root=tmp_path, source_repo=tmp_path, config=config,
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    with patch("biz.agent.backends.requests.post", side_effect=[created, accepted, aborted]) as post, patch(
+        "biz.agent.backends.requests.get", side_effect=get_control
+    ) as get:
+        try:
+            thread = threading.Thread(target=run_backend)
+            thread.start()
+            deadline = time.monotonic() + 2
+            while get.call_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            terminate_active_backends(grace_seconds=0)
+            thread.join(timeout=2)
+        finally:
+            reset_backend_shutdown()
+
+    assert not thread.is_alive()
+    assert errors and isinstance(errors[0], BackendExecutionError)
+    assert "shutdown" in str(errors[0])
+    assert post.call_args_list[-1].args[0].endswith("/session/session-1/abort")
+
+
+def test_opencode_positive_backend_timeout_aborts_session(tmp_path):
+    config = AgentReviewConfig(
+        opencode_api_url="http://opencode:4096", backend_timeout=0,
+        opencode_session_timeout=1,
+    )
+    created = MagicMock()
+    created.raise_for_status.return_value = None
+    created.json.return_value = {"id": "session-1"}
+    accepted = MagicMock()
+    accepted.raise_for_status.return_value = None
+    aborted = MagicMock()
+    aborted.raise_for_status.return_value = None
+    with patch(
+        "biz.agent.backends.requests.post", side_effect=[created, accepted, aborted]
+    ) as post:
+        try:
+            OpenCodeServeBackend().run(
+                prompt="review", job_root=tmp_path, source_repo=tmp_path, config=config,
+            )
+        except BackendExecutionError as exc:
+            assert exc.timed_out
+        else:
+            raise AssertionError("positive backend timeout should abort OpenCode")
+    assert post.call_args_list[-1].args[0].endswith("/session/session-1/abort")
+
+
+def test_shutdown_force_kills_local_process_groups_after_grace():
+    process = MagicMock(pid=991)
+    process.poll.return_value = None
+    with patch("biz.agent.backends._ACTIVE_PROCESSES", {process}), patch(
+        "biz.agent.backends.os.killpg"
+    ) as killpg:
+        try:
+            terminate_active_backends(grace_seconds=0)
+        finally:
+            reset_backend_shutdown()
+    assert killpg.call_args_list == [
+        ((991, signal.SIGTERM),),
+        ((991, signal.SIGKILL),),
+    ]
 
 
 def test_opencode_backend_materializes_custom_agent_name(tmp_path):

@@ -6,13 +6,14 @@ import signal
 import threading
 import time
 
-from biz.agent.backends import terminate_active_backends
+from biz.agent.backends import reset_backend_shutdown, terminate_active_backends
 from biz.agent.config import load_agent_review_config
 from biz.agent.job_store import AgentJobStore
 from biz.agent.service import execute_claimed_job, reap_agent_review_workspaces
 
 
 def run_worker(*, once: bool = False, poll_interval: float = 1.0) -> None:
+    reset_backend_shutdown()
     config = load_agent_review_config()
     config.ensure_runtime_directories()
     stop = threading.Event()

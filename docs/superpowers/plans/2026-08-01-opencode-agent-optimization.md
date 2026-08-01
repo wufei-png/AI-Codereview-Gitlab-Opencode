@@ -41,7 +41,7 @@ backend_timeout: -1
 8. If a fix is clear and unambiguous, apply it and create a fix MR according to the Agent's platform-native conventions. Auto-fix remains enabled by default.
 9. In a `finally`-equivalent cleanup path, remove the Review Worktree. Remove the clone by default; retain it only when configured.
 
-The service must never checkout or modify the operator's source working tree directly. Agent and platform CLIs use the system installation, authentication, and permissions prepared for the worker account. The service must not manage CLI login, token issuance, authentication refresh, or CLI authorization; it only supplies safe platform CLI example commands through the shared skill.
+The service must never checkout or modify the operator's source working tree directly. Local Agent and platform CLIs use the system installation, authentication, and permissions prepared for the worker account; OpenCode uses its remote execution environment. The service must not manage CLI login, token issuance, authentication refresh, or CLI authorization; it only supplies safe platform CLI example commands through the shared skill.
 
 ## Implementation phases
 
@@ -68,8 +68,8 @@ The service must never checkout or modify the operator's source working tree dir
 - Give unattended backends the filesystem, Bash, and unrestricted network capabilities required by the Shared Review Skill through explicit backend-specific flags; do not depend on interactive approval prompts. Codex retains its native workspace sandbox, while Pi and permitted Claude Bash commands inherit the worker account's host permissions.
 - Start Pi hermetically with project-local resources and automatic context loading disabled, the snapshotted Shared Review Skill loaded explicitly, and only the required built-in tools enabled.
 - Preserve the selected backend's documented authentication, proxy, custom CA, and provider-routing environment without forwarding unrelated service secrets.
-- Use the system-installed and pre-authenticated Agent and platform CLIs as the worker account; do not implement a second permission model in this service. Put concrete, safe `glab`, `gh`, and supported-platform example commands in the Shared Review Skill.
-- Before workspace preparation, check only that the selected Agent CLI and required platform CLI executables exist. Do not probe authentication or permissions. Treat a missing executable as a non-retryable configuration error.
+- Use system-installed and pre-authenticated Agent and platform CLIs in the selected backend's execution environment; local backends use the worker account and OpenCode uses the server environment. Do not implement a second permission model in this service. Put concrete, safe `glab`, `gh`, and supported-platform example commands in the Shared Review Skill.
+- Before workspace preparation for a local CLI backend, check only that the selected Agent CLI and required platform CLI executables exist. Do not probe authentication or permissions. Treat a missing executable as a non-retryable configuration error. For a remote OpenCode backend, do not reject the job based on worker-local platform CLI availability; the CLI belongs to the remote execution environment.
 - Fail closed when the selected backend is unavailable; do not silently switch to another Agent.
 
 ### Phase 4: Webhook integration and observability
@@ -89,12 +89,12 @@ The service must never checkout or modify the operator's source working tree dir
 - Store Agent Result in SQLite without a default application-level size limit. If `agent_result_max_bytes` is explicitly configured, retain its head and tail around an explicit truncation marker and persist `result_truncated=true`.
 - Preserve partial stdout as Agent Result on backend failure and write redacted stderr to `error`; do not merge the streams. Record cleanup failures only in `cleanup_error` without changing the backend-derived Execution Status.
 - When a worker lease expires after the Agent has started, mark the job `failed`, attempt orphan workspace cleanup, and do not requeue it.
-- On SIGTERM, stop claiming, wait for a configurable shutdown grace period, then terminate remaining Agent process groups, mark those jobs `failed`, and clean up.
+- On SIGTERM, stop claiming, wait for a configurable shutdown grace period, then terminate remaining local Agent process groups with TERM followed by KILL after a bounded grace. Abort remaining OpenCode sessions through the server API. Mark those jobs `failed` and clean up.
 - Retain completed Job records and Agent Results for 90 days by default, allow configuration, and delete expired rows in bounded maintenance batches.
 - Create the first Rolling Review Note through the platform CLI and update the stored `previous_review_note_id` on later revisions. Use body files or stdin and complete non-interactive flags in canonical skill examples.
 - Put a deterministic hidden marker in the note and write platform create/update responses to a fixed delivery receipt. Prefer the stored note ID, recover by marker when it is missing or deleted, and create a replacement only when recovery fails.
 - Keep the receipt as provider-native JSON and parse only note ID and URL in provider adapters. Do not ask the Agent to synthesize normalized receipt JSON.
-- Advance `previous_reviewed_source_revision` only after the delivery receipt confirms note creation or update. Keep backend `completed` semantics independent from delivery confirmation.
+- Parse the delivery receipt after every started Agent attempt, even if the backend fails or times out. Advance `previous_reviewed_source_revision` whenever that receipt confirms note creation or update. Keep backend `completed` semantics independent from delivery confirmation.
 - Set Delivery Status to `not_attempted` before Agent start, `confirmed` for a valid receipt, and `unconfirmed` otherwise; never derive it from model prose or use it to overwrite Execution Status.
 - Serialize jobs by review URL while retaining global concurrency across different reviews.
 - Replace the automation-owned Rolling Review Note body with a current snapshot containing the current revision, new or changed findings, unresolved findings, and newly fixed findings; do not append unbounded per-revision history or preserve manual edits to that note.
@@ -113,7 +113,7 @@ The service must never checkout or modify the operator's source working tree dir
 - Test unlimited Backend Timeout, positive Agent-execution timeout, independent Git/session/cleanup timeouts, process-group termination, pre-Agent retry fencing and backoff, no retry after Agent start, unlimited results by default, and explicit head-and-tail result truncation.
 - Test enqueue-time normalization without raw webhook retention, CLI existence-only preflight, missing-CLI non-retryability, partial stdout on failure, independent cleanup errors, and crashed-worker recovery after Agent start.
 - Test action-alias idempotency, target-revision-sensitive keys, queued-revision supersession, graceful worker shutdown, and 90-day bounded retention cleanup.
-- Test resolved-revision second-layer deduplication, provider-native receipt parsing, all Delivery Status transitions, stable finding-key reuse, and automation-owned note replacement.
+- Test that resolved-revision second-layer deduplication compares only the latest confirmed snapshot, including a force-push or revert back to an older pair. Test provider-native receipt parsing after backend failure, all Delivery Status transitions, stable finding-key reuse, and automation-owned note replacement.
 - Test OpenCode request payloads and canonical skill path propagation without a live server.
 - Perform separate manual smoke tests for authenticated `glab`/`gh` execution and OpenCode Serve behavior; automated tests do not prove external CLI authentication or live MR publication.
 

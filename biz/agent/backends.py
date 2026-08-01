@@ -7,6 +7,7 @@ import signal
 import shutil
 import subprocess
 import threading
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +20,19 @@ from biz.agent.config import AgentReviewConfig
 
 
 _ACTIVE_PROCESSES: set[subprocess.Popen[str]] = set()
+_ACTIVE_OPENCODE_EXECUTIONS: set[_OpenCodeExecution] = set()
 _ACTIVE_LOCK = threading.Lock()
+_BACKEND_SHUTDOWN = threading.Event()
+
+
+@dataclass(eq=False)
+class _OpenCodeExecution:
+    base_url: str
+    session_id: str
+    directory: str
+    auth: object | None
+    request_timeout: int
+    stop: threading.Event
 
 
 @dataclass(frozen=True)
@@ -100,15 +113,39 @@ def _timeout(value: int) -> int | None:
     return None if value == -1 else value
 
 
+def _terminate_process_groups(
+    processes: list[subprocess.Popen[str]], *, grace_seconds: float,
+) -> None:
+    for process in processes:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while any(process.poll() is None for process in processes) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    for process in processes:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def _run_cli(
     backend: str, args: list[str], prompt: str, cwd: Path, timeout: int, *, env: dict[str, str]
 ) -> BackendResult:
+    if _BACKEND_SHUTDOWN.is_set():
+        raise BackendExecutionError(f"{backend} interrupted by worker shutdown before start")
     process = subprocess.Popen(
         args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, cwd=cwd, env=env, start_new_session=True,
     )
     with _ACTIVE_LOCK:
         _ACTIVE_PROCESSES.add(process)
+    if _BACKEND_SHUTDOWN.is_set():
+        _terminate_process_groups([process], grace_seconds=5)
     try:
         try:
             stdout, stderr = process.communicate(prompt, timeout=_timeout(timeout))
@@ -133,15 +170,18 @@ def _run_cli(
     return BackendResult(backend, stdout or "", stderr=stderr or "")
 
 
-def terminate_active_backends() -> None:
+def reset_backend_shutdown() -> None:
+    _BACKEND_SHUTDOWN.clear()
+
+
+def terminate_active_backends(*, grace_seconds: float = 5.0) -> None:
+    _BACKEND_SHUTDOWN.set()
     with _ACTIVE_LOCK:
         processes = list(_ACTIVE_PROCESSES)
-    for process in processes:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        opencode_executions = list(_ACTIVE_OPENCODE_EXECUTIONS)
+    for execution in opencode_executions:
+        execution.stop.set()
+    _terminate_process_groups(processes, grace_seconds=grace_seconds)
 
 
 class OpenCodeServeBackend:
@@ -149,6 +189,8 @@ class OpenCodeServeBackend:
 
     def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
         del source_repo
+        if _BACKEND_SHUTDOWN.is_set():
+            raise BackendExecutionError("opencode interrupted by worker shutdown before start")
         self._materialize_project_config(job_root, config)
         auth = None
         if config.opencode_server_password:
@@ -167,12 +209,96 @@ class OpenCodeServeBackend:
             "agent": config.opencode_agent_name,
             "parts": [{"type": "text", "text": prompt}],
         }
-        message = requests.post(
-            f"{base}/session/{session_id}/message", params=params, json=payload, auth=auth,
-            timeout=_timeout(config.backend_timeout),
+        execution = _OpenCodeExecution(
+            base_url=base, session_id=str(session_id), directory=str(job_root), auth=auth,
+            request_timeout=min(config.opencode_session_timeout, 5), stop=threading.Event(),
         )
-        message.raise_for_status()
-        return BackendResult(self.name, message.text, str(session_id))
+        with _ACTIVE_LOCK:
+            _ACTIVE_OPENCODE_EXECUTIONS.add(execution)
+        try:
+            if _BACKEND_SHUTDOWN.is_set():
+                execution.stop.set()
+                self._abort(execution)
+                raise BackendExecutionError("opencode interrupted by worker shutdown before prompt")
+            message = requests.post(
+                f"{base}/session/{session_id}/prompt_async", params=params, json=payload, auth=auth,
+                timeout=execution.request_timeout,
+            )
+            message.raise_for_status()
+            return self._wait_for_result(execution, config.backend_timeout)
+        finally:
+            with _ACTIVE_LOCK:
+                _ACTIVE_OPENCODE_EXECUTIONS.discard(execution)
+
+    def _wait_for_result(self, execution: _OpenCodeExecution, timeout: int) -> BackendResult:
+        deadline = None if timeout == -1 else time.monotonic() + timeout
+        params = {"directory": execution.directory}
+        latest_output = ""
+        while True:
+            if execution.stop.is_set():
+                self._abort(execution)
+                raise BackendExecutionError(
+                    "opencode interrupted by worker shutdown", output=latest_output,
+                )
+            if deadline is not None and time.monotonic() >= deadline:
+                self._abort(execution)
+                raise BackendExecutionError(
+                    f"opencode timed out after {timeout}s", output=latest_output, timed_out=True,
+                )
+            try:
+                statuses_response = requests.get(
+                    f"{execution.base_url}/session/status", params=params, auth=execution.auth,
+                    timeout=execution.request_timeout,
+                )
+                statuses_response.raise_for_status()
+                statuses = statuses_response.json()
+                status = statuses.get(execution.session_id, {}) if isinstance(statuses, dict) else {}
+                status_type = status.get("type") if isinstance(status, dict) else None
+
+                messages_response = requests.get(
+                    f"{execution.base_url}/session/{execution.session_id}/message",
+                    params=params, auth=execution.auth, timeout=execution.request_timeout,
+                )
+                messages_response.raise_for_status()
+                messages = messages_response.json()
+                completed = self._latest_completed_assistant(messages)
+                if completed is not None:
+                    latest_output = json.dumps(completed, ensure_ascii=False)
+                    if status_type not in {"busy", "retry"}:
+                        return BackendResult(self.name, latest_output, execution.session_id)
+            except requests.RequestException:
+                # Control requests are deliberately short and retryable so an
+                # unlimited Agent execution can still observe worker shutdown.
+                pass
+            execution.stop.wait(0.5)
+
+    @staticmethod
+    def _latest_completed_assistant(messages: object) -> dict[str, object] | None:
+        if not isinstance(messages, list):
+            return None
+        for item in reversed(messages):
+            if not isinstance(item, dict):
+                continue
+            info = item.get("info")
+            if not isinstance(info, dict) or info.get("role") != "assistant":
+                continue
+            timing = info.get("time")
+            completed = isinstance(timing, dict) and timing.get("completed") is not None
+            if completed or info.get("error") is not None:
+                return item
+        return None
+
+    @staticmethod
+    def _abort(execution: _OpenCodeExecution) -> None:
+        try:
+            response = requests.post(
+                f"{execution.base_url}/session/{execution.session_id}/abort",
+                params={"directory": execution.directory}, auth=execution.auth,
+                timeout=execution.request_timeout,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            pass
 
     @staticmethod
     def _materialize_project_config(job_root: Path, config: AgentReviewConfig) -> None:

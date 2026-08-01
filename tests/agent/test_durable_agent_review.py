@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+from biz.agent.backends import BackendExecutionError
 from biz.agent.config import AgentReviewConfig, load_agent_review_config
 from biz.agent.job_store import AgentJobStore
 from biz.agent.review_request import AgentReviewRequest, from_webhook
-from biz.agent.service import _parse_delivery_receipt, _truncate_result
-from biz.agent.workspace import WorkspaceManager
+from biz.agent.service import _parse_delivery_receipt, _preflight, _truncate_result, execute_claimed_job
+from biz.agent.workspace import WorkspaceContext, WorkspaceManager
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -82,6 +85,134 @@ def test_confirmed_receipt_gates_previous_delivery_state(tmp_path):
     assert store.previous_delivery(kwargs["review_url"]) == {
         "source_revision": "S2", "note_id": "42", "note_url": "https://note",
     }
+
+
+def test_resolved_revision_deduplication_only_uses_latest_confirmed_snapshot(tmp_path):
+    store = AgentJobStore(tmp_path / "jobs.db")
+    common = dict(
+        provider="gitlab", review_url="https://gitlab.example/p/-/merge_requests/1",
+        backend="pi", source_branch="f", target_branch="main", request_json="{}",
+    )
+
+    def confirm(key, source, target, completed_at):
+        assert store.enqueue(key=key, **common)
+        assert store.claim_next()["idempotency_key"] == key
+        assert store.set_revisions(key, source_revision=source, target_revision=target)
+        assert store.mark_agent_started(key)
+        store.finish(key, status="completed", delivery_status="confirmed")
+        with sqlite3.connect(tmp_path / "jobs.db") as conn:
+            conn.execute(
+                "UPDATE agent_review_jobs SET completed_at=? WHERE idempotency_key=?",
+                (completed_at, key),
+            )
+
+    confirm("s1", "S1", "T1", "2026-01-01T00:00:00+00:00")
+    confirm("s2", "S2", "T1", "2026-01-02T00:00:00+00:00")
+
+    assert store.enqueue(key="reverted", **common)
+    assert store.claim_next()["idempotency_key"] == "reverted"
+    assert store.set_revisions("reverted", source_revision="S1", target_revision="T1")
+    store.finish("reverted", status="failed")
+
+    assert store.enqueue(key="same-latest", **common)
+    assert store.claim_next()["idempotency_key"] == "same-latest"
+    assert not store.set_revisions("same-latest", source_revision="S2", target_revision="T1")
+
+
+def test_failed_backend_still_confirms_receipt_and_records_cleanup_error(tmp_path):
+    request = AgentReviewRequest(
+        provider="github", remote_url="https://github.com/o/r.git",
+        target_remote_url="https://github.com/o/r.git",
+        review_url="https://github.com/o/r/pull/1", project_path="o/r",
+        target_project_path="o/r", source_branch="feature", target_branch="main",
+        revision_hint="S1", target_revision_hint="T1", action="update", event_key="job-1",
+    )
+    config = AgentReviewConfig(
+        backend="codex", job_db=tmp_path / "jobs.db",
+        clone_parent=tmp_path / "clones", worktree_parent=tmp_path / "jobs",
+    )
+    store = AgentJobStore(config.job_db)
+    assert store.enqueue(
+        key=request.event_key, provider=request.provider, review_url=request.review_url,
+        backend=config.backend, source_branch=request.source_branch,
+        target_branch=request.target_branch,
+        request_json=json.dumps(asdict(request)),
+    )
+    row = store.claim_next()
+    assert row is not None
+    job_root = tmp_path / "jobs" / "job-1"
+    source_repo = job_root / ".agent-source"
+    source_repo.mkdir(parents=True)
+    context = WorkspaceContext(
+        source_repo=source_repo, job_root=job_root, clone_path=None,
+        source_revision="S1", target_revision="T1", source_branch="feature",
+    )
+    backend = MagicMock()
+
+    def fail_after_delivery(**_kwargs):
+        (job_root / ".agent-delivery-receipt.json").write_text(
+            '{"id": 9, "html_url": "https://github.com/o/r/pull/1#issuecomment-9"}',
+            encoding="utf-8",
+        )
+        raise BackendExecutionError("backend failed", output="partial", stderr="boom")
+
+    backend.run.side_effect = fail_after_delivery
+    with patch("biz.agent.service._preflight"), patch(
+        "biz.agent.service.WorkspaceManager.prepare", return_value=context
+    ), patch(
+        "biz.agent.service.WorkspaceManager.cleanup", side_effect=OSError("cleanup denied")
+    ), patch("biz.agent.service.create_backend", return_value=backend):
+        execute_claimed_job(store, row, config)
+
+    with sqlite3.connect(config.job_db) as conn:
+        saved = conn.execute(
+            "SELECT status, delivery_status, previous_review_note_id, agent_result, cleanup_error "
+            "FROM agent_review_jobs WHERE idempotency_key=?",
+            (request.event_key,),
+        ).fetchone()
+    assert saved == ("failed", "confirmed", "9", "partial", "cleanup denied")
+
+
+def test_opencode_preflight_does_not_require_worker_local_platform_cli(tmp_path):
+    request = AgentReviewRequest(
+        provider="gitea", remote_url="https://gitea.example/o/r.git",
+        target_remote_url="https://gitea.example/o/r.git",
+        review_url="https://gitea.example/o/r/pulls/1", project_path="o/r",
+        target_project_path="o/r", source_branch="feature", target_branch="main",
+        revision_hint="S1", action="update", event_key="job-1",
+    )
+    with patch("biz.agent.service.shutil.which", return_value=None):
+        _preflight(AgentReviewConfig(backend="opencode"), request)
+
+
+def test_cleanup_raises_aggregated_job_and_clone_errors(tmp_path):
+    job_root = tmp_path / "jobs" / "job-1"
+    source_repo = job_root / ".agent-source"
+    clone_path = tmp_path / "clones" / "clone-1"
+    source_repo.mkdir(parents=True)
+    clone_path.mkdir(parents=True)
+    config = AgentReviewConfig(
+        worktree_parent=tmp_path / "jobs", clone_parent=tmp_path / "clones",
+        clone_cleanup="always",
+    )
+    context = WorkspaceContext(
+        source_repo=source_repo, job_root=job_root, clone_path=clone_path,
+        source_revision="S1", target_revision="T1", source_branch="feature",
+        source_repo_owned=True,
+    )
+    manager = WorkspaceManager(config)
+    with patch.object(manager, "_remove_worktrees"), patch(
+        "biz.agent.workspace.shutil.rmtree",
+        side_effect=[OSError("job denied"), OSError("clone denied")],
+    ):
+        try:
+            manager.cleanup(context, success=True)
+        except RuntimeError as exc:
+            assert "job workspace cleanup: job denied" in str(exc)
+            assert "clone cleanup: clone denied" in str(exc)
+        else:
+            raise AssertionError("cleanup should report removal failures")
+    assert context.cleaned
 
 
 def test_result_truncation_keeps_head_and_tail_and_receipt_stays_native(tmp_path):

@@ -206,9 +206,13 @@ class AgentJobStore:
     ) -> bool:
         with self._connect() as conn:
             duplicate = conn.execute(
-                "SELECT 1 FROM agent_review_jobs WHERE review_url=(SELECT review_url FROM agent_review_jobs WHERE idempotency_key=?) "
-                "AND source_revision=? AND target_revision=? AND delivery_status='confirmed' AND idempotency_key<>? LIMIT 1",
-                (key, source_revision, target_revision, key),
+                "SELECT 1 FROM agent_review_jobs WHERE idempotency_key=("
+                "SELECT candidate.idempotency_key FROM agent_review_jobs AS candidate "
+                "WHERE candidate.review_url=(SELECT review_url FROM agent_review_jobs WHERE idempotency_key=?) "
+                "AND candidate.delivery_status='confirmed' AND candidate.idempotency_key<>? "
+                "ORDER BY candidate.completed_at DESC, candidate.updated_at DESC LIMIT 1"
+                ") AND source_revision=? AND target_revision=?",
+                (key, key, source_revision, target_revision),
             ).fetchone()
             cursor = conn.execute(
                 "UPDATE agent_review_jobs SET source_revision=?, target_revision=?, previous_reviewed_source_revision=?, "

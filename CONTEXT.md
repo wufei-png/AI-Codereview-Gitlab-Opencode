@@ -21,7 +21,7 @@ Review Job 的服务侧生命周期状态，只使用 `queued`、`running`、`co
 _Avoid_: agent verdict, delivery status
 
 **Delivery Status**:
-Rolling Review Note 的服务侧确认状态，只使用 `not_attempted`、`confirmed` 和 `unconfirmed`。只有有效的平台原生 delivery receipt 才能得到 `confirmed`；它不改变 Execution Status。
+Rolling Review Note 的服务侧确认状态，只使用 `not_attempted`、`confirmed` 和 `unconfirmed`。只有有效的平台原生 delivery receipt 才能得到 `confirmed`，即使 Agent Backend 随后失败或超时也一样；它不改变 Execution Status。
 _Avoid_: execution status, inferred delivery success
 
 **Backend Timeout**:
@@ -41,7 +41,7 @@ Review Job 开始时从目标项目的 target branch 获取的最新提交，是
 _Avoid_: target branch name, fork-local base
 
 **Previous Reviewed Source Revision**:
-同一 merge/pull request 最近一次成功创建或更新 Rolling Review Note 时的 Source Revision。它只用于识别本轮 source delta 和控制重复输出，不能替代 Target Revision 参与完整正确性审查；backend 成功但没有 delivery receipt 时不推进。
+同一 merge/pull request 最新一次确认成功创建或更新 Rolling Review Note 时的 Source Revision。它只用于识别本轮 source delta 和控制重复输出，不能替代 Target Revision 参与完整正确性审查；backend 成功但没有 delivery receipt 时不推进，历史上曾确认过但已被较新快照替代的 revision 也不能触发去重。
 _Avoid_: review base, target revision
 
 **Rolling Review Note**:
@@ -91,5 +91,5 @@ Review Job 执行时没有人处理权限提示；每个 Agent Backend 只获得
 _Avoid_: interactive approval, permission popup
 
 **Platform CLI Delivery**:
-Agent 使用 worker 运行账户中由操作者预先安装、认证和授权的系统 CLI 提交 review note 和可选修复 MR；本项目只在 Shared Review Skill 中提供可执行的示例命令，并在 Agent 启动前检查所选 Agent CLI 和平台 CLI 的可执行文件是否存在。它不探测认证或权限，不签发、不降权、不代理也不验证 CLI 权限，并且不使用 MCP。
+Agent 使用其执行环境中由操作者预先安装、认证和授权的系统 CLI 提交 review note 和可选修复 MR；本项目只在 Shared Review Skill 中提供可执行的示例命令。本地 CLI Backend 启动前检查本地 Agent CLI 和平台 CLI 是否存在；远端 OpenCode Backend 不能用 worker 本地文件系统推断远端 CLI 能力。服务不探测认证或权限，不签发、不降权、不代理也不验证 CLI 权限，并且不使用 MCP。
 _Avoid_: MCP delivery, service-managed auth, service-managed CLI permissions

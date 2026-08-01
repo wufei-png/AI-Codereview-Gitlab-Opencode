@@ -60,6 +60,8 @@ def _preflight(config: AgentReviewConfig, request: AgentReviewRequest) -> None:
     }.get(config.backend)
     if agent_bin and not (shutil.which(agent_bin) or Path(agent_bin).exists()):
         raise NonRetryableConfigurationError(f"agent CLI not found: {agent_bin}")
+    if config.backend == "opencode":
+        return
     platform_cli = config.platform_clis.get(request.provider, request.platform_cli)
     if not (shutil.which(platform_cli) or Path(platform_cli).exists()):
         raise NonRetryableConfigurationError(f"platform CLI not found: {platform_cli}")
@@ -161,14 +163,6 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
         output = result.output
         backend_succeeded = True
         status = "completed"
-        try:
-            receipt = _parse_delivery_receipt(request.provider, context.job_root / ".agent-delivery-receipt.json")
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("[Agent Review] invalid delivery receipt: %s", redact_credentials(str(exc)))
-            receipt = None
-        if receipt:
-            receipt_raw, note_id, note_url = receipt
-            delivery_status = "confirmed"
     except BackendExecutionError as exc:
         output = exc.output
         error = redact_credentials(exc.stderr or str(exc))[:2000]
@@ -180,6 +174,17 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
                 return
         status = "failed"
     finally:
+        if context is not None and agent_started:
+            try:
+                receipt = _parse_delivery_receipt(
+                    request.provider, context.job_root / ".agent-delivery-receipt.json"
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("[Agent Review] invalid delivery receipt: %s", redact_credentials(str(exc)))
+                receipt = None
+            if receipt:
+                receipt_raw, note_id, note_url = receipt
+                delivery_status = "confirmed"
         if context is not None:
             try:
                 manager.cleanup(context, success=backend_succeeded)

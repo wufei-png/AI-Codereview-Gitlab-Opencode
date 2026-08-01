@@ -356,6 +356,7 @@ class WorkspaceManager:
     def cleanup(self, context: WorkspaceContext, *, success: bool) -> None:
         if context.cleaned:
             return
+        errors: list[str] = []
         try:
             owned_job = self._owned_path(str(context.job_root), self.config.worktree_parent)
             if owned_job is None:
@@ -369,16 +370,29 @@ class WorkspaceManager:
             if context.source_repo_owned:
                 source_repo = self._owned_path(str(context.source_repo), owned_job)
             if source_repo is not None:
-                self._remove_worktrees(source_repo, owned_job)
-            shutil.rmtree(owned_job, ignore_errors=True)
+                try:
+                    self._remove_worktrees(source_repo, owned_job)
+                except Exception as exc:
+                    errors.append(f"worktree cleanup: {exc}")
+            try:
+                if owned_job.exists():
+                    shutil.rmtree(owned_job)
+            except Exception as exc:
+                errors.append(f"job workspace cleanup: {exc}")
             owned_clone = self._owned_path(str(context.clone_path), self.config.clone_parent) if context.clone_path else None
             if owned_clone and (
                 self.config.clone_cleanup == "always"
                 or (self.config.clone_cleanup == "on_success" and success)
             ):
-                shutil.rmtree(owned_clone, ignore_errors=True)
+                try:
+                    if owned_clone.exists():
+                        shutil.rmtree(owned_clone)
+                except Exception as exc:
+                    errors.append(f"clone cleanup: {exc}")
         finally:
             context.cleaned = True
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def reclaim_orphan(self, *, source_repo: str | None, job_root: str | None, clone_path: str | None) -> None:
         """Reclaim workspace paths from a lease that expired after a crash."""
@@ -412,12 +426,13 @@ class WorkspaceManager:
         return candidate
 
     def _remove_worktrees(self, source_repo: Path, job_root: Path) -> None:
+        errors: list[str] = []
         result = _git(
             source_repo, "worktree", "list", "--porcelain",
             check=False, timeout=self.config.cleanup_timeout,
         )
         if result.returncode != 0:
-            return
+            raise RuntimeError((result.stderr or result.stdout or "git worktree list failed").strip())
         for path in self._worktree_paths(result.stdout):
             if path.resolve() == source_repo.resolve():
                 continue
@@ -425,11 +440,17 @@ class WorkspaceManager:
                 path.resolve().relative_to(job_root.resolve())
             except ValueError:
                 continue
-            _git(
+            removed = _git(
                 source_repo, "worktree", "remove", "--force", str(path),
                 check=False, timeout=self.config.cleanup_timeout,
             )
-        _git(source_repo, "worktree", "prune", check=False, timeout=self.config.cleanup_timeout)
+            if removed.returncode != 0:
+                errors.append((removed.stderr or removed.stdout or f"failed to remove {path}").strip())
+        pruned = _git(source_repo, "worktree", "prune", check=False, timeout=self.config.cleanup_timeout)
+        if pruned.returncode != 0:
+            errors.append((pruned.stderr or pruned.stdout or "git worktree prune failed").strip())
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     @staticmethod
     def _worktree_paths(output: str) -> list[Path]:
