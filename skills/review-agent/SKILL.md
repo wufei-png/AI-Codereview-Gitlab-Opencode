@@ -44,7 +44,11 @@ Assign each finding a simple stable key such as `F001`. Reuse the previous key w
 
 Fix clear, local, unambiguous defects in the worktree. Add or update focused tests when useful, and run the narrowest relevant validation before presenting the result. Do not make speculative refactors or silently change product behavior to resolve an ambiguous concern.
 
-After a successful fix, inspect the final diff and create the requested platform change using the platform's authenticated CLI. Use the CLI that matches `PLATFORM`:
+After a successful fix, inspect the final diff and create a stacked fix change using the platform's authenticated CLI. The fix branch must be based on `AUTOFIX_BASE_REVISION` and the change must target `AUTOFIX_TARGET_PROJECT_PATH` / `AUTOFIX_TARGET_BRANCH`, which are the original request's source project and source branch. Merging it advances the original merge/pull request's source branch. For fork requests, keep the fix target in the source project; do not target the upstream target project.
+
+Do not target `TARGET_PROJECT_PATH` / `TARGET_BRANCH` and do not create a standalone replacement merge/pull request for an auto-fix. If the platform cannot create this stacked change or the source branch is unavailable, report the fix as undelivered instead of silently falling back to the original target branch.
+
+Use the CLI that matches `PLATFORM`:
 
 - GitLab: `glab`
 - GitHub: `gh`

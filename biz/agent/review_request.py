@@ -38,6 +38,21 @@ class AgentReviewRequest:
         digest = hashlib.sha256(f"{self.provider}|{self.review_url}".encode("utf-8")).hexdigest()[:20]
         return f"ai-codereview:{digest}"
 
+    @property
+    def autofix_target_project_path(self) -> str:
+        """The original source project that owns the request's source branch."""
+        return self.project_path
+
+    @property
+    def autofix_target_remote_url(self) -> str:
+        """The original source remote used as the target for a stacked fix."""
+        return self.remote_url
+
+    @property
+    def autofix_target_branch(self) -> str:
+        """The original source branch that a stacked fix must update."""
+        return self.source_branch
+
 
 def _safe_remote_url(value: str) -> str:
     parsed = urlparse(value)
@@ -167,8 +182,10 @@ The service has already resolved the repository and fetched the latest remote so
 - PLATFORM: {request.provider}
 - PLATFORM_CLI: {config.platform_clis.get(request.provider, request.platform_cli)} (the CLI is expected to be installed and authenticated; do not configure credentials)
 - REVIEW_URL: {request.review_url}
-- REMOTE_URL: {_safe_remote_url(request.remote_url)}
-- PROJECT_PATH: {request.project_path}
+- REMOTE_URL: {_safe_remote_url(request.remote_url)} (the original source remote; compatibility alias for SOURCE_REMOTE_URL)
+- PROJECT_PATH: {request.project_path} (the original source project; compatibility alias for SOURCE_PROJECT_PATH)
+- SOURCE_PROJECT_PATH: {request.project_path}
+- SOURCE_REMOTE_URL: {_safe_remote_url(request.remote_url)}
 - TARGET_PROJECT_PATH: {request.target_project_path or request.project_path}
 - TARGET_REMOTE_URL: {_safe_remote_url(request.target_remote_url or request.remote_url)}
 - SOURCE_REPOSITORY: {source_repo}
@@ -176,6 +193,10 @@ The service has already resolved the repository and fetched the latest remote so
 - TARGET_BRANCH: {request.target_branch}
 - SOURCE_REVISION: {source_revision}
 - TARGET_REVISION: {target_revision}
+- AUTOFIX_TARGET_PROJECT_PATH: {request.autofix_target_project_path}
+- AUTOFIX_TARGET_REMOTE_URL: {_safe_remote_url(request.autofix_target_remote_url)}
+- AUTOFIX_TARGET_BRANCH: {request.autofix_target_branch}
+- AUTOFIX_BASE_REVISION: {source_revision}
 - PREVIOUS_REVIEWED_SOURCE_REVISION: {previous_reviewed_source_revision or "(none)"}
 - PREVIOUS_REVIEW_NOTE_ID: {previous_review_note_id or "(none)"}
 - REVIEW_NOTE_MARKER: {request.review_marker}
@@ -186,4 +207,6 @@ The service has already resolved the repository and fetched the latest remote so
 - DISCOVERY_MAX_DEPTH: {config.discovery_max_depth}
 
 Create your own disposable git worktree under WORKTREE_PARENT, choose its child directory and branch details yourself, and do all inspection, review, edits, tests, and platform delivery from that worktree. Review the complete diff from merge-base(TARGET_REVISION, SOURCE_REVISION) to SOURCE_REVISION. Use PREVIOUS_REVIEWED_SOURCE_REVISION only for reporting emphasis. Do not modify the source repository's checked-out files. The service removes the worktree and temporary clone after this run.
+
+When the shared skill permits an auto-fix, create a stacked fix change: base the fix branch on AUTOFIX_BASE_REVISION and target AUTOFIX_TARGET_PROJECT_PATH/AUTOFIX_TARGET_BRANCH. Do not target TARGET_PROJECT_PATH/TARGET_BRANCH or create a standalone replacement change. For fork requests, the fix target remains the original source project and source branch.
 """

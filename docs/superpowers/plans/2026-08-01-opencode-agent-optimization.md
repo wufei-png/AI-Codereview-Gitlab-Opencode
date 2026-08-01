@@ -38,7 +38,7 @@ backend_timeout: -1
 5. Ask the Agent to create a temporary Review Worktree under `worktree_parent`. The Agent chooses its child path, branch name and other Git details.
 6. Read and execute the single shared review skill.
 7. Review the complete current change from the target/source merge base. Use the previous/source range only to identify newly introduced changes for reporting. Then use the authenticated provider CLI (`glab`, `gh`, or the configured platform equivalent) to create or update the request's Rolling Review Note.
-8. If a fix is clear and unambiguous, apply it and create a fix MR according to the Agent's platform-native conventions. Auto-fix remains enabled by default.
+8. If a fix is clear and unambiguous, apply it and create a stacked fix MR/PR based on `SOURCE_REVISION` and targeting the original source project/source branch. Auto-fix remains enabled by default; it must not silently create a standalone change against the original target branch.
 9. In a `finally`-equivalent cleanup path, remove the Review Worktree. Remove the clone by default; retain it only when configured.
 
 The service must never checkout or modify the operator's source working tree directly. Local Agent and platform CLIs use the system installation, authentication, and permissions prepared for the worker account; OpenCode uses its remote execution environment. The service must not manage CLI login, token issuance, authentication refresh, or CLI authorization; it only supplies safe platform CLI example commands through the shared skill.

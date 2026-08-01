@@ -20,7 +20,7 @@ from biz.agent.backends import (
 )
 from biz.agent.config import AgentReviewConfig, load_agent_review_config
 from biz.agent.job_store import AgentJobStore
-from biz.agent.review_request import AgentReviewRequest, from_webhook
+from biz.agent.review_request import AgentReviewRequest, build_prompt, from_webhook
 from biz.agent.workspace import RepositoryResolver, WorkspaceManager, normalize_remote_url
 
 
@@ -85,6 +85,9 @@ def test_review_request_prefers_github_head_repo_for_fork():
     assert request.target_branch == "main"
     assert request.event_key
     assert request.target_project_path == "upstream/payment"
+    assert request.autofix_target_project_path == "fork/payment"
+    assert request.autofix_target_remote_url.endswith("fork/payment.git")
+    assert request.autofix_target_branch == "feature"
 
 
 def test_gitlab_fork_request_uses_source_project_remote():
@@ -111,6 +114,42 @@ def test_gitlab_fork_request_uses_source_project_remote():
     assert request.project_path == "fork/payment"
     assert request.remote_url.endswith("fork/payment.git")
     assert request.target_project_path == "upstream/payment"
+    assert request.autofix_target_project_path == "fork/payment"
+    assert request.autofix_target_remote_url.endswith("fork/payment.git")
+    assert request.autofix_target_branch == "feature"
+
+
+def test_build_prompt_exposes_stacked_autofix_target_for_fork(tmp_path):
+    request = AgentReviewRequest(
+        provider="gitlab",
+        remote_url="https://gitlab.example.com/fork/payment.git",
+        target_remote_url="https://gitlab.example.com/upstream/payment.git",
+        review_url="https://gitlab.example.com/upstream/payment/-/merge_requests/2",
+        project_path="fork/payment", target_project_path="upstream/payment",
+        source_branch="feature", target_branch="main", revision_hint="hint",
+        target_revision_hint="target-hint", action="update", event_key="prompt-job",
+    )
+    prompt = build_prompt(
+        request, str(tmp_path / "source"), str(tmp_path / "job"),
+        "source-sha", "target-sha", AgentReviewConfig(backend="codex"),
+        skill_path=str(tmp_path / "SKILL.md"),
+    )
+    assert "- SOURCE_PROJECT_PATH: fork/payment" in prompt
+    assert "- TARGET_PROJECT_PATH: upstream/payment" in prompt
+    assert "- AUTOFIX_TARGET_PROJECT_PATH: fork/payment" in prompt
+    assert "- AUTOFIX_TARGET_REMOTE_URL: https://gitlab.example.com/fork/payment.git" in prompt
+    assert "- AUTOFIX_TARGET_BRANCH: feature" in prompt
+    assert "- AUTOFIX_BASE_REVISION: source-sha" in prompt
+    assert "Do not target TARGET_PROJECT_PATH/TARGET_BRANCH" in prompt
+
+
+def test_shared_skill_requires_stacked_autofix_target():
+    skill = Path(__file__).resolve().parents[2] / "skills" / "review-agent" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "stacked fix change" in text
+    assert "AUTOFIX_TARGET_PROJECT_PATH" in text
+    assert "AUTOFIX_TARGET_BRANCH" in text
+    assert "Do not target `TARGET_PROJECT_PATH` / `TARGET_BRANCH`" in text
 
 
 def test_job_store_skips_completed_and_allows_failed_retry(tmp_path):

@@ -275,7 +275,7 @@ backend: opencode
 
 系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。Agent 自己在独立 `worktree_parent` 子目录中选择 worktree 路径和分支细节；worktree 固定清理，clone 默认也清理，可用 `clone_cleanup` 保留。服务在 Agent 运行前分别从 source 和 target 项目 fetch 最新分支，记录 `SOURCE_REVISION` 与 `TARGET_REVISION`，并以 merge base 审查完整 MR diff；fork 中的同名 target 分支不会替代 upstream。后续 source revision 仍做完整正确性审查，但用上次已交付 revision 到当前 revision 的范围突出新增问题，并更新每个 MR/PR 唯一的 Rolling Review Note。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
 
-自动修复默认开启，规则位于共享 skill 的 `## Auto-fix policy (enabled by default)`。如果只想审查、不自动修复，删除 skill 中这一整段即可；这是当前最简单的开关。
+自动修复默认开启，规则位于共享 skill 的 `## Auto-fix policy (enabled by default)`。修复会创建基于 `SOURCE_REVISION`、目标为原始 source project/source branch 的 stacked fix MR/PR；不会默认创建指向原始 target branch 的独立替代变更。如果只想审查、不自动修复，删除 skill 中这一整段即可；这是当前最简单的开关。
 
 默认 `AGENT_BACKEND_TIMEOUT=-1`，只表示 Agent 执行不限时；clone/fetch、OpenCode 会话建立和清理仍有独立正数 timeout。其他配置包括 `AGENT_WORKER_CONCURRENCY`、`AGENT_WORKER_SHUTDOWN_GRACE`、`AGENT_JOB_RETENTION_DAYS` 和可选的 `AGENT_RESULT_MAX_BYTES`。结果默认不限制大小；显式设置上限后保留头尾并记录截断。Job/结果默认保留 90 天。
 

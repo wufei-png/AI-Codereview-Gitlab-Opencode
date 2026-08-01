@@ -53,8 +53,12 @@ _Avoid_: review history log, one note per revision
 _Avoid_: centralized delivery
 
 **Auto-fix**:
-当 Agent 判断修复明确且安全时，直接修改代码并创建修复 MR 的默认行为。
+当 Agent 判断修复明确且安全时，直接修改代码并创建 Stacked Fix MR 的默认行为。
 _Avoid_: silent fix
+
+**Stacked Fix MR**:
+Auto-fix 创建的、基于当前 Source Revision、目标为原始 Source Project/Source Branch 的修复变更；合并后推进原始 merge/pull request 的 source branch。fork 请求也保持 source project 作为修复目标，不把修复变成指向原始 Target Project/Target Branch 的独立替代 MR。
+_Avoid_: standalone replacement MR, target-branch fix
 
 ## Repository workspace
 
