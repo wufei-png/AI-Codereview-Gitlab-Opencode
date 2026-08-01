@@ -261,10 +261,19 @@ class OpenCodeServeBackend:
                 )
                 messages_response.raise_for_status()
                 messages = messages_response.json()
-                completed = self._latest_completed_assistant(messages)
-                if completed is not None:
-                    latest_output = json.dumps(completed, ensure_ascii=False)
-                    if status_type not in {"busy", "retry"}:
+                latest = self._latest_assistant(messages)
+                if latest is not None:
+                    latest_output = json.dumps(latest, ensure_ascii=False)
+                    info = latest.get("info")
+                    if isinstance(info, dict) and info.get("error") is not None:
+                        if status_type not in {"busy", "retry"}:
+                            detail = self._assistant_error_detail(info.get("error"))
+                            raise BackendExecutionError(
+                                f"opencode agent failed: {detail}",
+                                output=latest_output,
+                                stderr=detail,
+                            )
+                    elif self._is_completed_assistant(latest) and status_type not in {"busy", "retry"}:
                         return BackendResult(self.name, latest_output, execution.session_id)
             except requests.RequestException:
                 # Control requests are deliberately short and retryable so an
@@ -273,7 +282,7 @@ class OpenCodeServeBackend:
             execution.stop.wait(0.5)
 
     @staticmethod
-    def _latest_completed_assistant(messages: object) -> dict[str, object] | None:
+    def _latest_assistant(messages: object) -> dict[str, object] | None:
         if not isinstance(messages, list):
             return None
         for item in reversed(messages):
@@ -282,11 +291,34 @@ class OpenCodeServeBackend:
             info = item.get("info")
             if not isinstance(info, dict) or info.get("role") != "assistant":
                 continue
-            timing = info.get("time")
-            completed = isinstance(timing, dict) and timing.get("completed") is not None
-            if completed or info.get("error") is not None:
-                return item
+            return item
         return None
+
+    @classmethod
+    def _latest_completed_assistant(cls, messages: object) -> dict[str, object] | None:
+        latest = cls._latest_assistant(messages)
+        if latest is not None and cls._is_completed_assistant(latest):
+            return latest
+        return None
+
+    @staticmethod
+    def _is_completed_assistant(message: dict[str, object]) -> bool:
+        info = message.get("info")
+        if not isinstance(info, dict) or info.get("error") is not None:
+            return False
+        timing = info.get("time")
+        return isinstance(timing, dict) and timing.get("completed") is not None
+
+    @staticmethod
+    def _assistant_error_detail(error: object) -> str:
+        if isinstance(error, dict):
+            data = error.get("data")
+            if isinstance(data, dict) and data.get("message"):
+                return str(data["message"])
+            for key in ("message", "name"):
+                if error.get(key):
+                    return str(error[key])
+        return str(error or "unknown OpenCode assistant error")
 
     @staticmethod
     def _abort(execution: _OpenCodeExecution) -> None:

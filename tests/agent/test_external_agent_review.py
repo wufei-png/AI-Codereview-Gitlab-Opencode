@@ -300,6 +300,42 @@ def test_opencode_backend_passes_job_directory_to_both_requests(tmp_path):
     assert (tmp_path / "prompts" / "docs-searcher.md").exists()
 
 
+def test_opencode_backend_turns_assistant_error_into_execution_error(tmp_path):
+    config = AgentReviewConfig(opencode_api_url="http://opencode:4096")
+    created = MagicMock()
+    created.raise_for_status.return_value = None
+    created.json.return_value = {"id": "session-1"}
+    accepted = MagicMock()
+    accepted.raise_for_status.return_value = None
+    statuses = MagicMock()
+    statuses.raise_for_status.return_value = None
+    statuses.json.return_value = {"session-1": {"type": "idle"}}
+    messages = MagicMock()
+    messages.raise_for_status.return_value = None
+    messages.json.return_value = [{
+        "info": {
+            "role": "assistant",
+            "time": {"completed": 1},
+            "error": {"name": "APIError", "data": {"message": "provider unauthorized"}},
+        },
+        "parts": [],
+    }]
+    with patch("biz.agent.backends.requests.post", side_effect=[created, accepted]), patch(
+        "biz.agent.backends.requests.get", side_effect=[statuses, messages]
+    ):
+        try:
+            OpenCodeServeBackend().run(
+                prompt="review", job_root=tmp_path, source_repo=tmp_path, config=config,
+            )
+        except BackendExecutionError as exc:
+            assert "provider unauthorized" in str(exc)
+            assert json.loads(exc.output)["info"]["error"]["name"] == "APIError"
+        else:
+            raise AssertionError("assistant provider errors must fail the backend")
+
+    assert OpenCodeServeBackend._latest_completed_assistant(messages.json()) is None
+
+
 def test_opencode_unlimited_execution_can_be_aborted_on_shutdown(tmp_path):
     config = AgentReviewConfig(
         opencode_api_url="http://opencode:4096", backend_timeout=-1,
