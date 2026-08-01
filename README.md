@@ -2,7 +2,7 @@
 
 # AI-Codereview-Gitlab-Opencode
 
-基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 Agent Review 版本，保留原有多平台 AI Code Review 能力，并支持 OpenCode Serve、Codex CLI 和 Claude CLI 三种显式后端。
+基于 [sunmh207/AI-Codereview-Gitlab](https://github.com/sunmh207/AI-Codereview-Gitlab) 演进的 Agent Review 版本，保留原有多平台 AI Code Review 能力，并支持 OpenCode Serve、Codex CLI、Claude CLI 和 Pi CLI 四种显式后端。
 
 [开源版](README.md) | 
 [Pro版](doc/pro.md)
@@ -230,14 +230,22 @@ OpenCode Serve 需要能访问本服务传入的临时 job 目录；如果 OpenC
 
 ```bash
 AGENT_REVIEW_ENABLED=1
-AGENT_BACKEND=opencode   # opencode | codex | claude
+AGENT_BACKEND=opencode   # opencode | codex | claude | pi
 AGENT_REVIEW_CONFIG=conf/agent_repos.yml
 AGENT_SHARED_REVIEW_SKILL_PATH=  # 可选，覆盖共享 skill 绝对路径
 ```
 
-`OPENCODE_ENABLED=1` 仍可作为旧配置的兼容开关，但它只负责选择 OpenCode 后端；启用 External Agent 后仍必须配置 webhook secret/signature 校验，不能用旧开关绕过认证。显式设置 `AGENT_REVIEW_ENABLED` 后以它为准。Codex/Claude 后端分别调用本机 `codex exec` / `claude -p`，OpenCode 后端调用 OpenCode Serve API。项目不负责安装 CLI、登录、创建 token 或维护认证状态；运行前请自行完成对应 CLI 的认证，GitLab/GitHub/Gitea 交付由 skill 指示 Agent 使用 `glab` / `gh` / 对应原生 CLI 完成，不使用 MCP。
+`OPENCODE_ENABLED=1` 仍可作为旧配置的兼容开关；启用 External Agent 后仍必须配置 webhook secret/signature 校验。显式设置 `AGENT_REVIEW_ENABLED` 后以它为准。Codex、Claude、Pi 后端分别调用本机 `codex exec`、`claude -p`、`pi --print`，OpenCode 后端调用 OpenCode Serve API。项目不负责安装 CLI、登录、创建 token 或维护认证/授权状态；运行前请自行完成对应 Agent CLI 和平台 CLI 的配置，平台交付由 canonical skill 指示 Agent 使用 `glab`、`gh`、`tea` 或配置的平台等价命令完成，不使用 MCP。
 
-运行进程必须能在 `PATH` 中找到所选 CLI；默认 Docker 镜像只提供 Git 和项目依赖，不替用户安装 Codex/Claude/OpenCode 或其认证环境。如在 Docker 中选择 `codex` 或 `claude`，请使用自己的派生镜像安装对应 CLI。
+Webhook 只把规范化任务写入 SQLite durable queue，不在 Web 进程中启动 Agent。至少启动一个独立 worker：
+
+```bash
+python -m biz.agent.worker
+```
+
+worker 默认使用与 Web 服务相同的系统账户，也可以由部署系统以独立低权限账户启动。`worker_concurrency` 只设置全局并发；同一个 MR/PR 的 revision 会串行处理。
+
+worker 必须能在 `PATH` 中找到所选 Agent CLI 和平台 CLI；服务只检查可执行文件是否存在，不探测认证或权限。默认 Docker 镜像不替用户安装这些 CLI 或认证环境。
 
 安全边界说明：External Agent 是被信任的执行者，当前集成用进程参数、临时 job 目录和 disposable source clone 限制正常路径，但不会伪造 Claude/Codex/OpenCode 的 OS 级沙箱。Agent 为了使用已认证的 `glab` / `gh` / Gitea CLI，可能继承操作者提供的 CLI 配置、Git credential helper 或 SSH agent；请在专用低权限用户、容器或仅挂载 job workspace 的 worker 中运行，不要让不可信仓库使用宿主机高权限凭据。项目不负责创建、登录、刷新或托管这些凭据。
 
@@ -265,11 +273,13 @@ backend: opencode
 
 `allowed_remote_hosts` 非空时是严格白名单；未填写时才从 `repo_roots`、`GITLAB_URL`、`GITHUB_URL` 和 `GITEA_URL` 推导默认主机。若请求包含 fork，source、target 和 review URL 的主机都必须通过白名单。
 
-系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。Agent 自己在独立 `worktree_parent` 子目录中选择 worktree 路径和分支细节；worktree 固定清理，clone 默认也清理，可用 `clone_cleanup` 保留。服务在 Agent 运行前 fetch 源分支最新远程 revision，因此审查的是任务执行时的最新代码，而非可能已过时的 webhook SHA。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
+系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。Agent 自己在独立 `worktree_parent` 子目录中选择 worktree 路径和分支细节；worktree 固定清理，clone 默认也清理，可用 `clone_cleanup` 保留。服务在 Agent 运行前分别从 source 和 target 项目 fetch 最新分支，记录 `SOURCE_REVISION` 与 `TARGET_REVISION`，并以 merge base 审查完整 MR diff；fork 中的同名 target 分支不会替代 upstream。后续 source revision 仍做完整正确性审查，但用上次已交付 revision 到当前 revision 的范围突出新增问题，并更新每个 MR/PR 唯一的 Rolling Review Note。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
 
 自动修复默认开启，规则位于共享 skill 的 `## Auto-fix policy (enabled by default)`。如果只想审查、不自动修复，删除 skill 中这一整段即可；这是当前最简单的开关。
 
-默认配置还包括：`AGENT_DISCOVERY_MAX_DEPTH`、`AGENT_ALLOWED_REMOTE_HOSTS`、`AGENT_CLONE_PARENT`、`AGENT_CLONE_CLEANUP`、`AGENT_WORKTREE_PARENT`、`AGENT_BACKEND_TIMEOUT`、`AGENT_CLONE_TIMEOUT`、`AGENT_JOB_LEASE_SECONDS` 和 `AGENT_JOB_DB`。Webhook 使用 SQLite job store 对同一个 provider/review/action/revision 做幂等，失败任务允许后续重新投递重试；崩溃后超过 lease 的 job 会回收其受控 workspace 并重新执行。
+默认 `AGENT_BACKEND_TIMEOUT=-1`，只表示 Agent 执行不限时；clone/fetch、OpenCode 会话建立和清理仍有独立正数 timeout。其他配置包括 `AGENT_WORKER_CONCURRENCY`、`AGENT_WORKER_SHUTDOWN_GRACE`、`AGENT_JOB_RETENTION_DAYS` 和可选的 `AGENT_RESULT_MAX_BYTES`。结果默认不限制大小；显式设置上限后保留头尾并记录截断。Job/结果默认保留 90 天。
+
+SQLite queue 在 webhook hints 和实际 fetch 后的 source/target revision 两层做幂等。Agent 启动前的临时基础设施失败最多指数退避重试三次；Agent 一旦启动就不自动重试，避免重复交付。Execution Status 与 Delivery Status 分离：backend 退出 0 得到 `completed`，只有有效的平台原生 delivery receipt 才得到 `confirmed`。
 
 Lease heartbeat 和 token fencing 会阻止正常的过期任务继续更新 job 状态；若宿主进程本身失联但其外部 Agent 子进程仍未退出，无法从 SQLite 中撤销已经发出的平台 CLI/OpenCode 网络副作用。生产部署应使用 backend timeout、专用 worker 和平台侧幂等/人工检查处理这一极端残余风险。
 

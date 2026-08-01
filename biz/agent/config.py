@@ -19,7 +19,7 @@ def _path(value: str | Path, *, base: Path = PROJECT_ROOT) -> Path:
     return path if path.is_absolute() else (base / path).resolve()
 
 
-def _int_env(name: str, default: int) -> int:
+def _int_env(name: str, default: int, *, minimum: int = 0) -> int:
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
@@ -27,9 +27,22 @@ def _int_env(name: str, default: int) -> int:
         value = int(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
     return value
+
+
+def _optional_size(name: str, raw_value: Any) -> int | None:
+    value = _env_value(name, raw_value)
+    if value is None or str(value).strip() in {"", "-1"}:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer or -1") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer or -1")
+    return parsed
 
 
 def _env_value(name: str, default: Any) -> Any:
@@ -48,15 +61,25 @@ class AgentReviewConfig:
     shared_review_skill: Path = PROJECT_ROOT / "skills" / "review-agent" / "SKILL.md"
     backend: str = "opencode"
     job_db: Path = PROJECT_ROOT / "data" / "agent_review_jobs.db"
-    backend_timeout: int = 1800
+    backend_timeout: int = -1
     clone_timeout: int = 300
+    opencode_session_timeout: int = 60
+    cleanup_timeout: int = 60
     job_lease_seconds: int = 3600
+    worker_concurrency: int = 2
+    worker_shutdown_grace: int = 30
+    job_retention_days: int = 90
+    agent_result_max_bytes: int | None = None
     opencode_api_url: str = "http://localhost:4096"
     opencode_agent_name: str = "code-reviewer"
     opencode_server_username: str = "opencode"
     opencode_server_password: str | None = None
     codex_bin: str = "codex"
     claude_bin: str = "claude"
+    pi_bin: str = "pi"
+    platform_clis: dict[str, str] = field(default_factory=lambda: {
+        "gitlab": "glab", "github": "gh", "gitea": "tea",
+    })
 
     def ensure_runtime_directories(self) -> None:
         self.clone_parent.mkdir(parents=True, exist_ok=True)
@@ -115,12 +138,21 @@ def load_agent_review_config() -> AgentReviewConfig:
         raise ValueError("AGENT_CLONE_CLEANUP must be always, never, or on_success")
 
     backend = str(_env_value("AGENT_BACKEND", raw.get("backend", "opencode"))).lower()
-    if backend not in {"opencode", "codex", "claude"}:
-        raise ValueError("AGENT_BACKEND must be opencode, codex, or claude")
+    if backend not in {"opencode", "codex", "claude", "pi"}:
+        raise ValueError("AGENT_BACKEND must be opencode, codex, claude, or pi")
 
     job_lease_seconds = _int_env("AGENT_JOB_LEASE_SECONDS", int(raw.get("job_lease_seconds", 3600)))
     if job_lease_seconds <= 0:
         raise ValueError("AGENT_JOB_LEASE_SECONDS must be greater than zero")
+
+    raw_platform_clis = raw.get("platform_clis") or {}
+    if not isinstance(raw_platform_clis, dict):
+        raise ValueError("platform_clis must be a provider-to-binary mapping")
+    platform_clis = {
+        "gitlab": str(_env_value("GITLAB_CLI_BIN", raw_platform_clis.get("gitlab", "glab"))),
+        "github": str(_env_value("GITHUB_CLI_BIN", raw_platform_clis.get("github", "gh"))),
+        "gitea": str(_env_value("GITEA_CLI_BIN", raw_platform_clis.get("gitea", "tea"))),
+    }
 
     return AgentReviewConfig(
         repo_roots=roots,
@@ -135,15 +167,23 @@ def load_agent_review_config() -> AgentReviewConfig:
         )),
         backend=backend,
         job_db=_path(_env_value("AGENT_JOB_DB", raw.get("job_db", "data/agent_review_jobs.db"))),
-        backend_timeout=_int_env("AGENT_BACKEND_TIMEOUT", int(raw.get("backend_timeout", 1800))),
+        backend_timeout=_int_env("AGENT_BACKEND_TIMEOUT", int(raw.get("backend_timeout", -1)), minimum=-1),
         clone_timeout=_int_env("AGENT_CLONE_TIMEOUT", int(raw.get("clone_timeout", 300))),
+        opencode_session_timeout=_int_env("AGENT_OPENCODE_SESSION_TIMEOUT", int(raw.get("opencode_session_timeout", 60)), minimum=1),
+        cleanup_timeout=_int_env("AGENT_CLEANUP_TIMEOUT", int(raw.get("cleanup_timeout", 60)), minimum=1),
         job_lease_seconds=job_lease_seconds,
+        worker_concurrency=_int_env("AGENT_WORKER_CONCURRENCY", int(raw.get("worker_concurrency", 2)), minimum=1),
+        worker_shutdown_grace=_int_env("AGENT_WORKER_SHUTDOWN_GRACE", int(raw.get("worker_shutdown_grace", 30)), minimum=1),
+        job_retention_days=_int_env("AGENT_JOB_RETENTION_DAYS", int(raw.get("job_retention_days", 90)), minimum=1),
+        agent_result_max_bytes=_optional_size("AGENT_RESULT_MAX_BYTES", raw.get("agent_result_max_bytes")),
         opencode_api_url=_env_value("OPENCODE_API_URL", "http://localhost:4096"),
         opencode_agent_name=_env_value("OPENCODE_AGENT_NAME", "code-reviewer"),
         opencode_server_username=_env_value("OPENCODE_SERVER_USERNAME", "opencode"),
         opencode_server_password=os.environ.get("OPENCODE_SERVER_PASSWORD"),
         codex_bin=os.environ.get("CODEX_BIN", "codex"),
         claude_bin=os.environ.get("CLAUDE_BIN", "claude"),
+        pi_bin=os.environ.get("PI_BIN", "pi"),
+        platform_clis=platform_clis,
     )
 
 

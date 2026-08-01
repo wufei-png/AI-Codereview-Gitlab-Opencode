@@ -8,11 +8,21 @@ clone_parent: data/agent-clones
 clone_cleanup: always       # always | never | on_success
 worktree_parent: data/agent-worktrees
 shared_review_skill: skills/review-agent/SKILL.md
-backend: opencode           # opencode | codex | claude
+backend: opencode           # opencode | codex | claude | pi
+platform_clis:
+  gitlab: glab
+  github: gh
+  gitea: tea
 job_db: data/agent_review_jobs.db
-backend_timeout: 1800
+backend_timeout: -1         # -1 means unlimited Agent execution
 clone_timeout: 300
+opencode_session_timeout: 60
+cleanup_timeout: 60
 job_lease_seconds: 3600
+worker_concurrency: 2
+worker_shutdown_grace: 30
+job_retention_days: 90
+# agent_result_max_bytes: 1048576  # omitted means unlimited
 
 # Example:
 # repo_roots:

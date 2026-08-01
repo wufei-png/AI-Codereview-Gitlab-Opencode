@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from biz.agent.backends import ClaudeCliBackend, CodexCliBackend, OpenCodeServeBackend
+from biz.agent.backends import ClaudeCliBackend, CodexCliBackend, OpenCodeServeBackend, PiCliBackend
 from biz.agent.config import AgentReviewConfig, load_agent_review_config
 from biz.agent.job_store import AgentJobStore
 from biz.agent.review_request import AgentReviewRequest, from_webhook
@@ -242,30 +242,49 @@ def test_opencode_backend_materializes_custom_agent_name(tmp_path):
 
 def test_codex_backend_uses_workspace_write_without_external_source_access(tmp_path):
     config = AgentReviewConfig(codex_bin="codex")
-    completed = MagicMock(returncode=0, stdout="ok", stderr="")
-    with patch("biz.agent.backends.shutil.which", return_value="/bin/codex"), patch("biz.agent.backends.subprocess.run", return_value=completed) as run:
+    process = MagicMock(pid=123, returncode=0)
+    process.communicate.return_value = ("ok", "")
+    with patch("biz.agent.backends.shutil.which", return_value="/bin/codex"), patch("biz.agent.backends.subprocess.Popen", return_value=process) as run:
         result = CodexCliBackend().run(prompt="review", job_root=tmp_path, source_repo=tmp_path / "source", config=config)
     args = run.call_args.args[0]
     assert args[:4] == ["/bin/codex", "exec", "--sandbox", "workspace-write"]
+    assert "--skip-git-repo-check" in args
+    assert "sandbox_workspace_write.network_access=true" in args
     assert "--add-dir" not in args
     assert str(tmp_path / "source") not in args
     assert str(config.shared_review_skill.parent) not in args
-    assert "GITLAB_ACCESS_TOKEN" not in run.call_args.kwargs["env"]
-    assert "OPENAI_API_KEY" not in run.call_args.kwargs["env"]
     assert result.output == "ok"
 
 
-def test_claude_backend_uses_accept_edits_without_permission_bypass(tmp_path):
+def test_claude_backend_is_unattended_and_preserves_standard_api_key(tmp_path, monkeypatch):
     config = AgentReviewConfig(claude_bin="claude")
-    completed = MagicMock(returncode=0, stdout="ok", stderr="")
-    with patch("biz.agent.backends.shutil.which", return_value="/bin/claude"), patch("biz.agent.backends.subprocess.run", return_value=completed) as run:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    process = MagicMock(pid=124, returncode=0)
+    process.communicate.return_value = ("ok", "")
+    with patch("biz.agent.backends.shutil.which", return_value="/bin/claude"), patch("biz.agent.backends.subprocess.Popen", return_value=process) as run:
         ClaudeCliBackend().run(prompt="review", job_root=tmp_path, source_repo=tmp_path / "source", config=config)
     args = run.call_args.args[0]
     assert args[:3] == ["/bin/claude", "-p", "--permission-mode"]
-    assert "acceptEdits" in args
+    assert "bypassPermissions" in args
     assert str(tmp_path) in args
     assert str(config.shared_review_skill.parent) not in args
-    assert "--dangerously-skip-permissions" not in args
+    assert run.call_args.kwargs["env"]["ANTHROPIC_API_KEY"] == "test-key"
+
+
+def test_pi_backend_disables_project_resources_and_loads_only_canonical_skill(tmp_path):
+    skill = tmp_path / ".agent-skill" / "SKILL.md"
+    skill.parent.mkdir()
+    skill.write_text("review", encoding="utf-8")
+    process = MagicMock(pid=125, returncode=0)
+    process.communicate.return_value = ("ok", "")
+    config = AgentReviewConfig(pi_bin="pi")
+    with patch("biz.agent.backends.shutil.which", return_value="/bin/pi"), patch("biz.agent.backends.subprocess.Popen", return_value=process) as run:
+        PiCliBackend().run(prompt="review", job_root=tmp_path, source_repo=tmp_path / "source", config=config)
+    args = run.call_args.args[0]
+    for flag in ("--no-session", "--no-approve", "--no-extensions", "--no-prompt-templates", "--no-context-files"):
+        assert flag in args
+    assert args[args.index("--skill") + 1] == str(skill)
+    assert args[args.index("--tools") + 1] == "read,bash,edit,write,grep,find,ls"
 
 
 def test_config_accepts_full_project_url_mapping(tmp_path, monkeypatch):
