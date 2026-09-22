@@ -65,13 +65,9 @@ class ReadFileTool(Tool):
                 return ToolResult(False, "", "binary file, not readable")
 
         try:
-            text = sample.decode("utf-8", errors="replace") if sample else ""
+            # The binary sample may end in the middle of a UTF-8 character.
             with open(candidate, "r", encoding="utf-8", errors="replace") as f:
-                # Skip the bytes we already read.
-                if sample:
-                    f.seek(len(sample))
-                rest = f.read()
-            text = (text + rest) if text or rest else ""
+                text = f.read()
         except OSError as e:
             return ToolResult(False, "", f"read error: {e}")
 

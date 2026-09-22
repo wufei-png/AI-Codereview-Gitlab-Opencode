@@ -113,6 +113,21 @@ class TestRegistry:
 
 
 class TestDefaultToolSet:
+    def test_registered_read_file_preserves_utf8_at_sample_boundary(self, tmp_path):
+        from biz.agent.llm_adapter import ToolCall
+
+        content = "x" * 8191 + "中" + "\nafter\n"
+        (tmp_path / "text.txt").write_bytes(content.encode("utf-8"))
+        registry = ToolRegistry()
+        register_default_tools(registry, tmp_path)
+
+        result = registry.dispatch(
+            ToolCall(id="1", name="read_file", arguments={"path": "text.txt"})
+        )
+        assert result.success is True
+        assert result.error is None
+        assert result.output == f"lines 1-2:\n{'x' * 8191}中\nafter"
+
     def test_default_registry_excludes_ast_query(self, tmp_path):
         """ast_query was a Python-only tool; for language-agnostic reviews
         the agent uses read_file + run_command(rg/ls/...) instead. This test
