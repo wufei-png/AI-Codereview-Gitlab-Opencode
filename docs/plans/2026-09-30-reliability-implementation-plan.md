@@ -143,7 +143,7 @@ June 文档明确 historical/superseded；August 文档引用新 ADR，不按旧
 | 计划与 ADR | 已写入 | 用户确认设计并授权实施；基线与 149 项测试已核对 |
 | 1 入口与 CI | 已完成 | route/security 42 passed；全套 183 passed；CI 已配置，GitHub 执行待推送后验证 |
 | 2 HTTP/capability | 已完成 | provider/resolver 36 passed；全套 216 passed；三平台 fork source 解析修复；无 live provider smoke |
-| 3 取消/lifecycle | 待实施 | |
+| 3 取消/lifecycle | 已完成 | worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
 | 4 worktree | 待实施 | |
 | 5 receipt | 待实施 | |
 | 6 operations | 待实施 | |

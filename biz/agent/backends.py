@@ -44,17 +44,18 @@ class BackendResult:
 
 
 class BackendExecutionError(RuntimeError):
-    def __init__(self, message: str, *, output: str = "", stderr: str = "", timed_out: bool = False):
+    def __init__(self, message: str, *, output: str = "", stderr: str = "", timed_out: bool = False, cleanup_safe: bool = True):
         super().__init__(message)
         self.output = output
         self.stderr = stderr
         self.timed_out = timed_out
+        self.cleanup_safe = cleanup_safe
 
 
 class AgentBackend(Protocol):
     name: str
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
         ...
 
 
@@ -134,31 +135,51 @@ def _terminate_process_groups(
 
 
 def _run_cli(
-    backend: str, args: list[str], prompt: str, cwd: Path, timeout: int, *, env: dict[str, str]
+    backend: str, args: list[str], prompt: str, cwd: Path, timeout: int,
+    *, env: dict[str, str], cancel: threading.Event | None = None,
 ) -> BackendResult:
-    if _BACKEND_SHUTDOWN.is_set():
-        raise BackendExecutionError(f"{backend} interrupted by worker shutdown before start")
+    cancel = cancel or threading.Event()
+    if _BACKEND_SHUTDOWN.is_set() or cancel.is_set():
+        raise BackendExecutionError(f"{backend} cancelled before start")
     process = subprocess.Popen(
         args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, cwd=cwd, env=env, start_new_session=True,
     )
     with _ACTIVE_LOCK:
         _ACTIVE_PROCESSES.add(process)
-    if _BACKEND_SHUTDOWN.is_set():
-        _terminate_process_groups([process], grace_seconds=5)
+    deadline = None if timeout == -1 else time.monotonic() + timeout
+    input_text: str | None = prompt
     try:
-        try:
-            stdout, stderr = process.communicate(prompt, timeout=_timeout(timeout))
-        except subprocess.TimeoutExpired as exc:
+        while True:
+            timed_out = deadline is not None and time.monotonic() >= deadline
+            if cancel.is_set() or _BACKEND_SHUTDOWN.is_set() or timed_out:
+                _terminate_process_groups([process], grace_seconds=5)
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # A child can retain the pipes after its parent exited.
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        stdout, stderr = process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        raise BackendExecutionError(
+                            f"{backend} termination unconfirmed", timed_out=timed_out,
+                            cleanup_safe=False,
+                        ) from None
+                reason = f"timed out after {timeout}s" if timed_out else "cancelled"
+                raise BackendExecutionError(
+                    f"{backend} {reason}", output=stdout or "", stderr=stderr or "",
+                    timed_out=timed_out,
+                )
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-                stdout, stderr = process.communicate(timeout=5)
+                stdout, stderr = process.communicate(input_text, timeout=0.2)
+                break
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                stdout, stderr = process.communicate()
-            raise BackendExecutionError(
-                f"{backend} timed out after {timeout}s", output=stdout or "", stderr=stderr or "", timed_out=True,
-            ) from exc
+                # communicate retains partial streams; do not resend stdin.
+                input_text = None
     finally:
         with _ACTIVE_LOCK:
             _ACTIVE_PROCESSES.discard(process)
@@ -187,10 +208,10 @@ def terminate_active_backends(*, grace_seconds: float = 5.0) -> None:
 class OpenCodeServeBackend:
     name = "opencode"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
         del source_repo
-        if _BACKEND_SHUTDOWN.is_set():
-            raise BackendExecutionError("opencode interrupted by worker shutdown before start")
+        if _BACKEND_SHUTDOWN.is_set() or (cancel is not None and cancel.is_set()):
+            raise BackendExecutionError("opencode cancelled before start")
         self._materialize_project_config(job_root, config)
         auth = None
         if config.opencode_server_password:
@@ -211,21 +232,27 @@ class OpenCodeServeBackend:
         }
         execution = _OpenCodeExecution(
             base_url=base, session_id=str(session_id), directory=str(job_root), auth=auth,
-            request_timeout=min(config.opencode_session_timeout, 5), stop=threading.Event(),
+            request_timeout=min(config.opencode_session_timeout, 5), stop=cancel or threading.Event(),
         )
         with _ACTIVE_LOCK:
             _ACTIVE_OPENCODE_EXECUTIONS.add(execution)
         try:
-            if _BACKEND_SHUTDOWN.is_set():
+            if _BACKEND_SHUTDOWN.is_set() or execution.stop.is_set():
                 execution.stop.set()
-                self._abort(execution)
-                raise BackendExecutionError("opencode interrupted by worker shutdown before prompt")
+                aborted = self._abort(execution)
+                raise BackendExecutionError(f"opencode cancelled before prompt; session={session_id}; abort confirmed={aborted}", cleanup_safe=aborted)
             message = requests.post(
                 f"{base}/session/{session_id}/prompt_async", params=params, json=payload, auth=auth,
                 timeout=execution.request_timeout,
             )
             message.raise_for_status()
             return self._wait_for_result(execution, config.backend_timeout)
+        except requests.RequestException:
+            aborted = self._abort(execution)
+            raise BackendExecutionError(
+                f"opencode session {session_id} control request failed; abort confirmed={aborted}",
+                cleanup_safe=aborted,
+            ) from None
         finally:
             with _ACTIVE_LOCK:
                 _ACTIVE_OPENCODE_EXECUTIONS.discard(execution)
@@ -236,14 +263,15 @@ class OpenCodeServeBackend:
         latest_output = ""
         while True:
             if execution.stop.is_set():
-                self._abort(execution)
+                aborted = self._abort(execution)
                 raise BackendExecutionError(
-                    "opencode interrupted by worker shutdown", output=latest_output,
+                    f"opencode interrupted by shutdown or job cancellation; session={execution.session_id}; abort confirmed={aborted}",
+                    output=latest_output, cleanup_safe=aborted,
                 )
             if deadline is not None and time.monotonic() >= deadline:
-                self._abort(execution)
+                aborted = self._abort(execution)
                 raise BackendExecutionError(
-                    f"opencode timed out after {timeout}s", output=latest_output, timed_out=True,
+                    f"opencode timed out after {timeout}s", output=latest_output, timed_out=True, cleanup_safe=aborted,
                 )
             try:
                 statuses_response = requests.get(
@@ -321,7 +349,7 @@ class OpenCodeServeBackend:
         return str(error or "unknown OpenCode assistant error")
 
     @staticmethod
-    def _abort(execution: _OpenCodeExecution) -> None:
+    def _abort(execution: _OpenCodeExecution) -> bool:
         try:
             response = requests.post(
                 f"{execution.base_url}/session/{execution.session_id}/abort",
@@ -329,8 +357,9 @@ class OpenCodeServeBackend:
                 timeout=execution.request_timeout,
             )
             response.raise_for_status()
+            return True
         except requests.RequestException:
-            pass
+            return False
 
     @staticmethod
     def _materialize_project_config(job_root: Path, config: AgentReviewConfig) -> None:
@@ -372,20 +401,20 @@ class OpenCodeServeBackend:
 class CodexCliBackend:
     name = "codex"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
         binary = _required_binary(config.codex_bin)
         args = [
             binary, "exec", "--sandbox", "workspace-write", "--cd", str(job_root),
             "--config", "sandbox_workspace_write.network_access=true",
             "--skip-git-repo-check", "--ephemeral", "--color", "never", "-",
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name))
+        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 class ClaudeCliBackend:
     name = "claude"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
         binary = _required_binary(config.claude_bin)
         args = [
             binary, "-p", "--permission-mode", "bypassPermissions", "--tools", "default",
@@ -393,13 +422,13 @@ class ClaudeCliBackend:
             "--add-dir", str(job_root),
             "--output-format", "text",
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name))
+        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 class PiCliBackend:
     name = "pi"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
         del source_repo
         binary = _required_binary(config.pi_bin)
         skill_path = job_root / ".agent-skill" / "SKILL.md"
@@ -408,7 +437,7 @@ class PiCliBackend:
             "--no-prompt-templates", "--no-context-files",
             "--tools", "read,bash,edit,write,grep,find,ls", "--skill", str(skill_path),
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name))
+        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 def create_backend(config: AgentReviewConfig) -> AgentBackend:

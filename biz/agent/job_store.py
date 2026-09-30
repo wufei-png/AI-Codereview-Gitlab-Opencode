@@ -264,7 +264,7 @@ class AgentJobStore:
             ).fetchone()
             return row is not None
 
-    def reap_stale(self, *, lease_seconds: int) -> list[dict[str, str | None]]:
+    def reap_stale(self, *, lease_seconds: int, exclude_keys: tuple[str, ...] = ()) -> list[dict[str, str | None]]:
         """Fence expired jobs and return their owned paths for filesystem cleanup."""
         reclaimed: list[dict[str, str | None]] = []
         with self._connect() as conn:
@@ -274,13 +274,16 @@ class AgentJobStore:
                 "FROM agent_review_jobs WHERE status='running'"
             ).fetchall()
             for row in rows:
-                if not _is_stale(row["updated_at"], lease_seconds):
+                if row["idempotency_key"] in exclude_keys or not _is_stale(row["updated_at"], lease_seconds):
                     continue
-                reclaimed.append({
-                    "source_repo": row["source_repo"],
-                    "job_root": row["job_root"],
-                    "clone_path": row["clone_path"],
-                })
+                # A started backend may outlive its worker. Retain its workspace
+                # for operator reconciliation instead of deleting beneath it.
+                if not row["agent_started"]:
+                    reclaimed.append({
+                        "source_repo": row["source_repo"],
+                        "job_root": row["job_root"],
+                        "clone_path": row["clone_path"],
+                    })
                 if not row["agent_started"] and row["attempt"] <= 3:
                     delay = min(300, 5 * (2 ** max(0, row["attempt"] - 1)))
                     available = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
@@ -293,7 +296,7 @@ class AgentJobStore:
                     conn.execute(
                         "UPDATE agent_review_jobs SET status='failed', lease_token=NULL, delivery_status='unconfirmed', "
                         "error=?, completed_at=?, updated_at=? WHERE idempotency_key=? AND status='running'",
-                        ("job lease expired after Agent start; not safe to retry", _now(), _now(), row["idempotency_key"]),
+                        ("job lease expired after Agent start; workspace retained; check external execution before cleanup", _now(), _now(), row["idempotency_key"]),
                     )
         return reclaimed
 

@@ -21,49 +21,64 @@ def run_worker(*, once: bool = False, poll_interval: float = 1.0) -> None:
     def request_stop(_signum, _frame) -> None:
         stop.set()
 
-    signal.signal(signal.SIGTERM, request_stop)
-    signal.signal(signal.SIGINT, request_stop)
-    reap_agent_review_workspaces()
-    AgentJobStore(config.job_db).delete_expired(retention_days=config.job_retention_days)
+    previous_signals = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    failures: list[Exception] = []
+    maintenance = None
+    try:
+        reap_agent_review_workspaces()
+        AgentJobStore(config.job_db).delete_expired(retention_days=config.job_retention_days)
 
-    def maintain() -> None:
-        while not stop.wait(60):
-            reap_agent_review_workspaces()
-            AgentJobStore(config.job_db).delete_expired(retention_days=config.job_retention_days)
+        def maintain() -> None:
+            while not stop.wait(60):
+                reap_agent_review_workspaces()
+                AgentJobStore(config.job_db).delete_expired(retention_days=config.job_retention_days)
 
-    maintenance = threading.Thread(target=maintain, name="agent-review-maintenance", daemon=True)
-    maintenance.start()
+        maintenance = threading.Thread(target=maintain, name="agent-review-maintenance", daemon=True)
+        maintenance.start()
 
-    def loop() -> None:
-        store = AgentJobStore(config.job_db)
-        while not stop.is_set():
-            row = store.claim_next()
-            if row is None:
-                if once:
-                    return
-                stop.wait(poll_interval)
-                continue
-            execute_claimed_job(store, row, config)
-            if once:
-                return
+        def loop() -> None:
+            try:
+                store = AgentJobStore(config.job_db)
+                while not stop.is_set():
+                    row = store.claim_next()
+                    if row is None:
+                        if once:
+                            return
+                        stop.wait(poll_interval)
+                        continue
+                    execute_claimed_job(store, row, config)
+                    if once:
+                        return
+            except Exception as exc:
+                failures.append(exc)
+                stop.set()
 
-    threads = [
-        threading.Thread(target=loop, name=f"agent-review-worker-{index + 1}")
-        for index in range(config.worker_concurrency)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        while thread.is_alive() and not stop.is_set():
-            thread.join(timeout=0.5)
-    if stop.is_set():
-        deadline = time.monotonic() + config.worker_shutdown_grace
+        threads = [
+            threading.Thread(target=loop, name=f"agent-review-worker-{index + 1}")
+            for index in range(config.worker_concurrency)
+        ]
         for thread in threads:
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
-        if any(thread.is_alive() for thread in threads):
-            terminate_active_backends()
+            thread.start()
+        for thread in threads:
+            while thread.is_alive() and not stop.is_set():
+                thread.join(timeout=0.5)
+        if stop.is_set():
+            deadline = time.monotonic() + config.worker_shutdown_grace
             for thread in threads:
-                thread.join(timeout=5)
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if any(thread.is_alive() for thread in threads):
+                terminate_active_backends()
+                for thread in threads:
+                    thread.join(timeout=5)
+
+    finally:
+        stop.set()
+        if maintenance is not None:
+            maintenance.join(timeout=2)
+        for sig, handler in previous_signals.items():
+            signal.signal(sig, handler)
+    if failures:
+        raise RuntimeError("Agent worker execution failed") from failures[0]
 
 
 def main() -> None:

@@ -15,6 +15,10 @@ from biz.agent.workspace import WorkspaceManager, redact_credentials
 from biz.utils.log import logger
 
 
+_ACTIVE_JOBS: dict[str, threading.Event] = {}
+_ACTIVE_JOB_LOCK = threading.Lock()
+
+
 class NonRetryableConfigurationError(RuntimeError):
     pass
 
@@ -96,7 +100,9 @@ def reap_agent_review_workspaces() -> None:
     config = load_agent_review_config()
     store = AgentJobStore(config.job_db)
     manager = WorkspaceManager(config)
-    for orphan in store.reap_stale(lease_seconds=config.job_lease_seconds):
+    with _ACTIVE_JOB_LOCK:
+        active_keys = tuple(_ACTIVE_JOBS)
+    for orphan in store.reap_stale(lease_seconds=config.job_lease_seconds, exclude_keys=active_keys):
         manager.reclaim_orphan(**orphan)
 
 
@@ -115,11 +121,20 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
     delivery_status = "not_attempted"
     receipt_raw = note_id = note_url = None
     heartbeat_stop = threading.Event()
+    cancel = threading.Event()
+    cleanup_safe = True
+    with _ACTIVE_JOB_LOCK:
+        _ACTIVE_JOBS[key] = cancel
     interval = max(0.1, min(job_config.job_lease_seconds / 3, 60.0))
 
     def heartbeat() -> None:
         while not heartbeat_stop.wait(interval):
-            if not store.heartbeat(key):
+            try:
+                renewed = store.heartbeat(key)
+            except Exception:
+                renewed = False
+            if not renewed:
+                cancel.set()
                 return
 
     heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -141,6 +156,8 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
             previous_source_revision=previous.get("source_revision", ""),
             previous_note_id=previous.get("note_id", ""), previous_note_url=previous.get("note_url", ""),
         ):
+            if not store.is_owner(key) or cancel.is_set():
+                raise RuntimeError("agent review lease lost during revision check")
             status = "completed"
             delivery_status = "confirmed"
             note_id = previous.get("note_id") or None
@@ -153,23 +170,26 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
             previous_reviewed_source_revision=previous.get("source_revision", ""),
             previous_review_note_id=previous.get("note_id", ""),
         )
+        if cancel.is_set():
+            raise RuntimeError("agent review cancelled before backend start")
         if not store.mark_agent_started(key):
             raise RuntimeError("agent review lease lost before backend start")
         agent_started = True
         delivery_status = "unconfirmed"
         result = create_backend(job_config).run(
-            prompt=prompt, job_root=context.job_root, source_repo=context.source_repo, config=job_config,
+            prompt=prompt, job_root=context.job_root, source_repo=context.source_repo, config=job_config, cancel=cancel,
         )
         output = result.output
         backend_succeeded = True
         status = "completed"
     except BackendExecutionError as exc:
+        cleanup_safe = exc.cleanup_safe
         output = exc.output
         error = redact_credentials(exc.stderr or str(exc))[:2000]
         status = "timed_out" if exc.timed_out else "failed"
     except Exception as exc:
         error = redact_credentials(str(exc))[:2000]
-        if not agent_started and not isinstance(exc, NonRetryableConfigurationError):
+        if not agent_started and not cancel.is_set() and not isinstance(exc, NonRetryableConfigurationError):
             if store.retry_before_agent(key, error=error):
                 return
         status = "failed"
@@ -185,22 +205,28 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
             if receipt:
                 receipt_raw, note_id, note_url = receipt
                 delivery_status = "confirmed"
-        if context is not None:
+        if not cleanup_safe:
+            cleanup_error = "workspace retained: backend termination unconfirmed"
+        if context is not None and cleanup_safe:
             try:
                 manager.cleanup(context, success=backend_succeeded)
             except Exception as exc:
                 cleanup_error = redact_credentials(str(exc))[:2000]
-        result_text, truncated = _truncate_result(output, job_config.agent_result_max_bytes)
-        if store.is_owner(key):
-            store.finish(
-                key, status=status, error=error, agent_result=result_text,
-                result_truncated=truncated, cleanup_error=cleanup_error,
-                delivery_status=delivery_status, delivery_receipt=receipt_raw,
-                note_id=note_id, note_url=note_url,
+        try:
+            result_text, truncated = _truncate_result(output, job_config.agent_result_max_bytes)
+            if store.is_owner(key):
+                store.finish(
+                    key, status=status, error=error, agent_result=result_text,
+                    result_truncated=truncated, cleanup_error=cleanup_error,
+                    delivery_status=delivery_status, delivery_receipt=receipt_raw,
+                    note_id=note_id, note_url=note_url,
+                )
+            logger.info(
+                "[Agent Review] finished status=%s delivery=%s backend=%s review=%s",
+                status, delivery_status, job_config.backend, request.review_url,
             )
-        logger.info(
-            "[Agent Review] finished status=%s delivery=%s backend=%s review=%s",
-            status, delivery_status, job_config.backend, request.review_url,
-        )
-        heartbeat_stop.set()
-        heartbeat_thread.join(timeout=2)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=2)
+            with _ACTIVE_JOB_LOCK:
+                _ACTIVE_JOBS.pop(key, None)
