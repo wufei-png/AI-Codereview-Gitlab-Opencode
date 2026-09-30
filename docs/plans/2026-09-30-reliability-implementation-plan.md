@@ -1,6 +1,6 @@
 # 受信 Agent 的可靠性改造计划
 
-日期：2026-09-30。状态：**已确认并授权实施**。本轮只生成项目文档，不生成 `/tmp` 提示词。各阶段遵循 `implement-in-stages`，检查通过后各自提交；不推送。
+日期：2026-09-30。状态：**已确认并授权实施**。本轮先收敛项目文档，再直接按阶段实施；不生成 `/tmp` 提示词。各阶段遵循 `implement-in-stages`，检查通过后各自提交；不推送。
 
 ## 接手与基线
 
@@ -146,5 +146,5 @@ June 文档明确 historical/superseded；August 文档引用新 ADR，不按旧
 | 3 取消/lifecycle | 已完成 | worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
 | 4 worktree | 已完成 | workspace 6 passed；全套 233 passed；含借用 alternates 的 local seed 与 fork；CLI cwd 固定 SHA，OpenCode job 根加载配置；无 live backend smoke |
 | 5 receipt | 已完成 | receipt/durable 41 passed；全套 264 passed；三平台 native 回执、本地快照匹配与 failed+confirmed；原文和独立 delivery_error 入库；未做 provider readback |
-| 6 operations | 待实施 | |
+| 6 operations | 已完成 | worker/startup/deployment 17 passed；全套 270 passed；Docker arm64 build、断网非 root fake-worker/API smoke、Supervisor API/UI health 均通过；未消费真实 queue/调用模型 |
 | 7 release/docs | 待实施 | |

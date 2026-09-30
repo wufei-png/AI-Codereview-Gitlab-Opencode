@@ -1,3 +1,10 @@
 .venv
 data
 log
+.git
+conf/.env
+conf/.env.*
+!conf/.env.dist
+.coverage
+.pytest_cache
+**/__pycache__

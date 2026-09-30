@@ -3,7 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/sunmh207/ai-codereview-gitlab:1.5.1
+    image: ${CODE_REVIEW_IMAGE:-ai-codereview-opencode:local}
+    user: ${CODE_REVIEW_USER:-0:0}
     ports:
       - "5001:5001"
       - "5002:5002"
@@ -11,5 +12,23 @@ services:
       - ./data:/app/data
       - ./log:/app/log
     env_file:
-      - ./conf/.env
+      - ${CODE_REVIEW_ENV_FILE:-./conf/.env}
+    restart: unless-stopped
+  agent-worker:
+    profiles: [agent]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${CODE_REVIEW_IMAGE:-ai-codereview-opencode:local}
+    user: ${CODE_REVIEW_USER:-0:0}
+    command: [python, -m, biz.agent.worker]
+    volumes:
+      - ./data:/app/data
+      - ./log:/app/log
+    env_file:
+      - ${CODE_REVIEW_ENV_FILE:-./conf/.env}
+    environment:
+      OPENCODE_API_URL: ${OPENCODE_API_URL:-http://host.docker.internal:4096}
+    extra_hosts:
+      - host.docker.internal:host-gateway
     restart: unless-stopped

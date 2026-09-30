@@ -1,13 +1,8 @@
 import os
 
-from dotenv import load_dotenv
-
 from biz.llm.factory import Factory
+from biz.utils.flags import env_flag
 from biz.utils.log import logger
-
-# 指定环境变量文件路径
-ENV_FILE_PATH = "conf/.env"
-load_dotenv(ENV_FILE_PATH)
 
 
 REQUIRED_ENV_VARS = [
@@ -68,6 +63,9 @@ def check_llm_connectivity():
 def check_config():
     """主检查入口"""
     logger.info("开始检查配置项...")
+    if not env_flag(os.getenv("LLM_REVIEW_ENABLED"), default=True):
+        logger.info("内置 LLM Review 已关闭，跳过 LLM 配置和连接检查。")
+        return
     check_env_vars()
     check_llm_provider()
     check_llm_connectivity()

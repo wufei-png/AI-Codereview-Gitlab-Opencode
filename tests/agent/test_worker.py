@@ -47,6 +47,28 @@ def test_worker_once_claims_and_finishes_isolated_job(tmp_path, monkeypatch):
     assert signal.getsignal(signal.SIGTERM) == before
 
 
+def test_worker_check_leaves_queued_job_untouched_and_does_not_require_serve_clis(tmp_path, monkeypatch, capsys):
+    config, _ = queued_job(tmp_path)
+    monkeypatch.setattr(worker, 'load_agent_review_config', lambda: config)
+    monkeypatch.setattr(worker.shutil, 'which', lambda binary: '/usr/bin/git' if binary == 'git' else None)
+    monkeypatch.setattr(sys, 'argv', ['worker', '--check'])
+    worker.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report['backend'] == 'opencode'
+    assert report['external_auth_and_connectivity'] == 'not checked'
+    assert not any(report['worker_platform_clis'].values())
+    assert saved_status(config) == ('queued', 'not_attempted')
+
+
+def test_worker_check_rejects_missing_selected_cli(tmp_path, monkeypatch):
+    from dataclasses import replace
+    config, _ = queued_job(tmp_path)
+    monkeypatch.setattr(worker.shutil, 'which', lambda binary: '/usr/bin/git' if binary == 'git' else None)
+    with pytest.raises(ValueError, match='codex CLI is not executable'):
+        worker.check_worker_configuration(replace(config, backend='codex'))
+    assert saved_status(config) == ('queued', 'not_attempted')
+
+
 def test_sigterm_stops_claiming_and_terminates_active_backend(tmp_path, monkeypatch):
     config, _ = queued_job(tmp_path)
     from dataclasses import replace

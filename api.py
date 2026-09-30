@@ -1,10 +1,10 @@
 """
 API 服务主程序入口
 """
-from dotenv import load_dotenv
+from biz.utils.environment import load_project_environment
 
 # 必须在其他导入之前加载环境变量
-load_dotenv("conf/.env")
+load_project_environment()
 
 import os
 

@@ -58,6 +58,8 @@ Note 中，便于团队查看和处理。
 
 ## 部署
 
+推荐主机运行 External Agent。启动、`--check`、可选 Compose worker、同路径 OpenCode 文件共享和恢复步骤见 [worker operations](docs/operations/agent-worker.md)。
+
 ### 方案一：Docker 部署
 
 **1. 准备环境文件**
@@ -131,7 +133,7 @@ cd AI-Codereview-Gitlab-Opencode
 
 **2. 安装依赖**
 
-使用 Python 环境（建议使用虚拟环境 venv）安装项目依赖(Python 版本：3.10+):
+使用 Python 环境（建议使用虚拟环境 venv）安装项目依赖(Python 版本：3.11+):
 
 ```bash
 pip install -r requirements.txt

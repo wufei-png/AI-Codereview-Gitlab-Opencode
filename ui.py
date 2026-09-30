@@ -14,7 +14,9 @@ import hmac
 import base64
 import time
 import pandas as pd
-from dotenv import load_dotenv
+from biz.utils.environment import load_project_environment
+
+load_project_environment()
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.font_manager as fm
@@ -24,7 +26,6 @@ from biz.service.review_service import ReviewService
 from matplotlib.ticker import MaxNLocator
 from streamlit_cookies_manager import CookieManager
 
-load_dotenv("conf/.env")
 
 
 def set_global_font():
