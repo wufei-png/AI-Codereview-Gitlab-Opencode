@@ -9,6 +9,7 @@ from pathlib import Path
 
 from biz.agent.backends import BackendExecutionError, create_backend
 from biz.agent.config import AgentReviewConfig, is_agent_review_enabled, load_agent_review_config, remote_allowed
+from biz.agent.delivery_receipt import read_delivery_receipt
 from biz.agent.job_store import AgentJobStore
 from biz.agent.review_request import AgentReviewRequest, build_prompt, from_webhook, is_reviewable_action
 from biz.agent.workspace import WorkspaceManager, redact_credentials
@@ -40,20 +41,6 @@ def _truncate_result(value: str, limit: int | None) -> tuple[str, bool]:
     tail = budget - head
     clipped = encoded[:head] + marker + (encoded[-tail:] if tail else b"")
     return clipped.decode("utf-8", errors="replace"), True
-
-
-def _parse_delivery_receipt(provider: str, path: Path) -> tuple[str, str, str] | None:
-    if not path.is_file():
-        return None
-    raw = path.read_text(encoding="utf-8")
-    payload = json.loads(raw)
-    if not isinstance(payload, dict) or payload.get("id") is None:
-        return None
-    note_id = str(payload["id"])
-    note_url = str(payload.get("html_url") or payload.get("web_url") or "")
-    if provider == "gitlab" and not note_url:
-        note_url = str(payload.get("noteable_url") or "")
-    return raw, note_id, note_url
 
 
 def _preflight(config: AgentReviewConfig, request: AgentReviewRequest) -> None:
@@ -118,6 +105,7 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
     error: str | None = None
     output = ""
     cleanup_error: str | None = None
+    delivery_error: str | None = None
     delivery_status = "not_attempted"
     receipt_raw = note_id = note_url = None
     heartbeat_stop = threading.Event()
@@ -196,15 +184,13 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
         status = "failed"
     finally:
         if context is not None and agent_started:
-            try:
-                receipt = _parse_delivery_receipt(
-                    request.provider, context.job_root / ".agent-delivery-receipt.json"
-                )
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                logger.warning("[Agent Review] invalid delivery receipt: %s", redact_credentials(str(exc)))
-                receipt = None
-            if receipt:
-                receipt_raw, note_id, note_url = receipt
+            receipt = read_delivery_receipt(
+                context.job_root / ".agent-delivery-receipt.json", request,
+                context.source_revision, context.target_revision,
+            )
+            receipt_raw, delivery_error = receipt.raw, receipt.error
+            if receipt.error is None:
+                note_id, note_url = receipt.note_id, receipt.note_url
                 delivery_status = "confirmed"
         if not cleanup_safe:
             cleanup_error = "workspace retained: backend termination unconfirmed"
@@ -219,7 +205,7 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
                 store.finish(
                     key, status=status, error=error, agent_result=result_text,
                     result_truncated=truncated, cleanup_error=cleanup_error,
-                    delivery_status=delivery_status, delivery_receipt=receipt_raw,
+                    delivery_status=delivery_status, delivery_receipt=receipt_raw, delivery_error=delivery_error,
                     note_id=note_id, note_url=note_url,
                 )
             logger.info(

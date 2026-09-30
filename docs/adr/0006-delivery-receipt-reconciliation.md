@@ -5,3 +5,10 @@
 The reconciliation is successful only when exactly one current automation-owned note matches the marker and exposes a provider note ID and URL. The Agent writes that provider-native note object unchanged to `DELIVERY_RECEIPT_PATH`; it must not synthesize a boolean or text-based success receipt. Zero matches, multiple matches, a missing identifier, or an inability to establish the current snapshot leaves Delivery Status as `unconfirmed`.
 
 The durable queue continues to use only `confirmed` deliveries for `Previous Reviewed Source Revision`, note-ID reuse, and resolved-revision deduplication. This preserves safe history semantics when a publish may have happened but cannot be uniquely identified. The trade-off is that an ambiguous provider state can produce a later duplicate note; resolving that ambiguity is safer than silently updating the wrong note.
+
+
+## Local snapshot validation (2026-09-30)
+
+ADR-0007 retains Agent-owned publishing. For new executions, the framework reads the unchanged native note object locally: a positive note ID, exactly one exact hidden review marker, and both complete authoritative revisions in the body are required. Recognizable native review/repository URLs and GitLab `noteable_iid` must agree with the target request. GitLab `noteable_id` is a global database ID and is not compared to the MR IID. A native GitLab response may lack a browser URL; the known note ID is sufficient with matching body/context.
+
+`confirmed` means a snapshot-matching response supplied by the trusted Agent; it does not claim provider readback or that the current remote heads still match. No new Agent fields or normalized result schema are introduced. Missing/invalid receipts remain `unconfirmed`; available raw JSON/text is retained in `delivery_receipt`, with a separate `delivery_error`. Backend execution and workspace cleanup errors remain independent. A failed backend with a valid receipt can still confirm delivery. Unconfirmed delivery neither advances history nor retries an already-started Agent. Existing confirmed rows are not reclassified.

@@ -62,6 +62,7 @@ class AgentJobStore:
                 "previous_review_note_url": "TEXT",
                 "delivery_status": "TEXT NOT NULL DEFAULT 'not_attempted'",
                 "delivery_receipt": "TEXT",
+                "delivery_error": "TEXT",
                 "agent_result": "TEXT",
                 "result_truncated": "INTEGER NOT NULL DEFAULT 0",
                 "cleanup_error": "TEXT",
@@ -304,7 +305,7 @@ class AgentJobStore:
         self, key: str, *, status: str, error: str | None = None,
         agent_result: str | None = None, result_truncated: bool = False,
         cleanup_error: str | None = None, delivery_status: str | None = None,
-        delivery_receipt: str | None = None, note_id: str | None = None, note_url: str | None = None,
+        delivery_receipt: str | None = None, delivery_error: str | None = None, note_id: str | None = None, note_url: str | None = None,
     ) -> None:
         if status not in {"completed", "failed", "timed_out"}:
             raise ValueError("job status must be completed, failed, or timed_out")
@@ -313,10 +314,10 @@ class AgentJobStore:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE agent_review_jobs SET status=?, error=?, agent_result=?, result_truncated=?, cleanup_error=?, "
-                "delivery_status=COALESCE(?, delivery_status), delivery_receipt=?, "
+                "delivery_status=COALESCE(?, delivery_status), delivery_receipt=?, delivery_error=?, "
                 "previous_review_note_id=COALESCE(?, previous_review_note_id), previous_review_note_url=COALESCE(?, previous_review_note_url), "
                 "completed_at=?, updated_at=?, lease_token=NULL WHERE idempotency_key=? AND status='running' AND lease_token=?",
-                (status, error, agent_result, int(result_truncated), cleanup_error, delivery_status, delivery_receipt,
+                (status, error, agent_result, int(result_truncated), cleanup_error, delivery_status, delivery_receipt, delivery_error,
                  note_id, note_url, _now(), _now(), key, self.claim_token),
             )
 

@@ -145,6 +145,6 @@ June 文档明确 historical/superseded；August 文档引用新 ADR，不按旧
 | 2 HTTP/capability | 已完成 | provider/resolver 36 passed；全套 216 passed；三平台 fork source 解析修复；无 live provider smoke |
 | 3 取消/lifecycle | 已完成 | worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
 | 4 worktree | 已完成 | workspace 6 passed；全套 233 passed；含借用 alternates 的 local seed 与 fork；CLI cwd 固定 SHA，OpenCode job 根加载配置；无 live backend smoke |
-| 5 receipt | 待实施 | |
+| 5 receipt | 已完成 | receipt/durable 41 passed；全套 264 passed；三平台 native 回执、本地快照匹配与 failed+confirmed；原文和独立 delivery_error 入库；未做 provider readback |
 | 6 operations | 待实施 | |
 | 7 release/docs | 待实施 | |

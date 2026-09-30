@@ -11,7 +11,8 @@ from biz.agent.backends import BackendExecutionError
 from biz.agent.config import AgentReviewConfig, load_agent_review_config
 from biz.agent.job_store import AgentJobStore
 from biz.agent.review_request import AgentReviewRequest, from_webhook
-from biz.agent.service import _parse_delivery_receipt, _preflight, _truncate_result, execute_claimed_job
+from biz.agent.delivery_receipt import read_delivery_receipt
+from biz.agent.service import _preflight, _truncate_result, execute_claimed_job
 from biz.agent.workspace import WorkspaceContext, WorkspaceManager
 
 
@@ -151,7 +152,8 @@ def test_failed_backend_still_confirms_receipt_and_records_cleanup_error(tmp_pat
 
     def fail_after_delivery(**_kwargs):
         (job_root / ".agent-delivery-receipt.json").write_text(
-            '{"id": 9, "html_url": "https://github.com/o/r/pull/1#issuecomment-9"}',
+            json.dumps({"id": 9, "html_url": "https://github.com/o/r/pull/1#issuecomment-9",
+                        "body": f"<!-- {request.review_marker} -->\nSource Revision: S1\nTarget Revision: T1"}),
             encoding="utf-8",
         )
         raise BackendExecutionError("backend failed", output="partial", stderr="boom")
@@ -220,10 +222,14 @@ def test_result_truncation_keeps_head_and_tail_and_receipt_stays_native(tmp_path
     assert truncated and clipped.startswith("HEAD") and clipped.endswith("TAIL")
     assert "truncated" in clipped
     receipt = tmp_path / "receipt.json"
-    receipt.write_text('{"id": 7, "html_url": "https://example/note/7", "provider_extra": true}', encoding="utf-8")
-    raw, note_id, note_url = _parse_delivery_receipt("github", receipt)
-    assert json.loads(raw)["provider_extra"] is True
-    assert (note_id, note_url) == ("7", "https://example/note/7")
+    request = AgentReviewRequest('github', 'https://github.com/o/r.git', 'https://github.com/o/r/pull/1', 'o/r', 'f', 'main', '', 'opened', 'job')
+    receipt.write_text(json.dumps({"id": 7, "html_url": request.review_url + "#issuecomment-7",
+                                   "body": f"<!-- {request.review_marker} --> S1 T1", "provider_extra": True}), encoding="utf-8")
+    result = read_delivery_receipt(receipt, request, "S1", "T1")
+    assert result.error is None
+    assert json.loads(result.raw)["provider_extra"] is True
+    assert (result.note_id, result.note_url) == ("7", request.review_url + "#issuecomment-7")
+
 
 
 def test_fork_fetches_latest_target_from_upstream(tmp_path):
