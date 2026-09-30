@@ -81,6 +81,45 @@ def test_body_requires_unique_exact_marker_and_full_revisions(tmp_path, mutation
     assert read_delivery_receipt(path, request, 'a' * 40, 'b' * 40).error
 
 
+@pytest.mark.parametrize('body', [
+    'Source Revision: {target}\nTarget Revision: {source}',
+    'Source Revision: {stale}\nTarget Revision: {target}\nHistory mentions {source}',
+    'Source Revision: {source}\nTarget Revision: {stale}\nHistory mentions {target}',
+    'Source Revision: {source}\nTarget Revision: {target}\nSource Revision: {stale}',
+    '- **Source Revision:** `{target}`\n- **Target Revision:** `{source}`',
+    '| Source Revision | [{source}](https://example.test/commit/{source}) |\n| Target Revision | `{stale}` |\nHistory mentions {target}',
+    'CURRENT_SOURCE_REVISION: {stale}; TARGET_REVISION: {target}\nHistory mentions {source}',
+])
+def test_current_revision_contradictions_cannot_be_hidden_in_history(tmp_path, body):
+    request = request_for('github')
+    note = native_note(request)
+    note['body'] = f'<!-- {request.review_marker} -->\n' + body.format(source='a' * 40, target='b' * 40, stale='c' * 40)
+    path = tmp_path / 'receipt.json'
+    raw = json.dumps(note)
+    path.write_text(raw)
+    receipt = read_delivery_receipt(path, request, 'a' * 40, 'b' * 40)
+    assert receipt.error and receipt.note_id is None and receipt.raw == raw
+
+
+@pytest.mark.parametrize('body', [
+    '- **Source Revision:** `{source}`\n- **Target Revision:** `{target}`',
+    '| Source Revision | [{source}](https://example.test/commit/{source}) |\n| Target Revision | `{target}` |',
+    'SOURCE_REVISION: {source}; TARGET_REVISION: {target}',
+    'Current Source Revision：{source}\nCurrent Target Revision：{target}',
+    'Source Revision: {source}\nTarget Revision: {target}\nPrevious Source Revision: {stale}',
+    'Reviewed {source} against {target}',
+])
+def test_native_body_format_remains_flexible(tmp_path, body):
+    request = request_for('gitlab')
+    note = native_note(request)
+    note['body'] = f'<!-- {request.review_marker} -->\n' + body.format(source='a' * 40, target='b' * 40, stale='c' * 40)
+    path = tmp_path / 'receipt.json'
+    raw = json.dumps(note)
+    path.write_text(raw)
+    receipt = read_delivery_receipt(path, request, 'a' * 40, 'b' * 40)
+    assert receipt.error is None and receipt.note_id == '9' and receipt.raw == raw
+
+
 @pytest.mark.parametrize('field,value', [('noteable_iid', 2), ('noteable_type', 'Issue')])
 def test_gitlab_uses_iid_not_global_id(tmp_path, field, value):
     request = request_for('gitlab')
@@ -126,7 +165,8 @@ def test_malformed_or_partial_receipt_is_not_delivery(tmp_path, raw):
     assert result.raw == raw and result.error
 
 
-def test_unconfirmed_receipt_does_not_advance_history_or_rerun_agent(tmp_path, monkeypatch):
+@pytest.mark.parametrize('contradictory_source', [False, True])
+def test_unconfirmed_receipt_does_not_advance_history_or_rerun_agent(tmp_path, monkeypatch, contradictory_source):
     request = request_for('github')
     config = AgentReviewConfig(backend='codex', job_db=tmp_path / 'jobs.db',
                                worktree_parent=tmp_path / 'jobs', clone_parent=tmp_path / 'clones')
@@ -137,6 +177,12 @@ def test_unconfirmed_receipt_does_not_advance_history_or_rerun_agent(tmp_path, m
     root = tmp_path / 'jobs/job'
     root.mkdir(parents=True)
     raw = '{"id": 9}'
+    delivery_error = 'delivery receipt has no note body'
+    if contradictory_source:
+        note = native_note(request)
+        note['body'] = note['body'].replace('a' * 40, 'c' * 40) + '\nHistory mentions ' + 'a' * 40
+        raw = json.dumps(note)
+        delivery_error = 'delivery receipt does not match source revision'
     (root / '.agent-delivery-receipt.json').write_text(raw)
     context = WorkspaceContext(root, root, None, source_revision='a' * 40, source_branch='f', target_revision='b' * 40)
     backend = Mock()
@@ -148,7 +194,7 @@ def test_unconfirmed_receipt_does_not_advance_history_or_rerun_agent(tmp_path, m
     execute_claimed_job(store, row, config)
     with sqlite3.connect(config.job_db) as conn:
         saved = conn.execute('SELECT status, delivery_status, delivery_receipt, delivery_error, error FROM agent_review_jobs').fetchone()
-    assert saved == ('completed', 'unconfirmed', raw, 'delivery receipt has no note body', None)
+    assert saved == ('completed', 'unconfirmed', raw, delivery_error, None)
     assert store.previous_delivery(request.review_url) == {}
     assert store.claim_next() is None
     backend.run.assert_called_once()

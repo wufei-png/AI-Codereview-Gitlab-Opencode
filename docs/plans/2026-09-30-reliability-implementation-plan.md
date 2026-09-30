@@ -166,3 +166,9 @@ Docker arm64 使用当前 Dockerfile 构建成功；非 root `1000:1000`、断�
 最终验证（阶段 8 后）：Python 3.11 coverage 全套 272 passed，Agent 85%、runner 94%、safety 100%、worker 87%；重新创建本仓库专用 Python 3.12 临时 venv 安装 requirements 后 272 passed，环境已移除。重建 Docker arm64 镜像成功，断网非 root smoke 通过；Linux 全套 271 passed/1 skipped，唯一 skip 仍是缺容器内 Docker CLI 的 Compose 检查。workflow lint 与整体 `git diff --check` 通过。文档准备 + 8 个实施阶段共 9 个本地提交，不推送。
 
 阶段 8 自引用提交以主题记录；可执行 `git log -1 --format=%h --grep='^fix(agent): bind native API receipts to the configured platform$'` 查询。外部条件限制仍是实际 backend/provider 发布、远端 GitHub workflow 与 registry publication 未验证；这些未被离线 smoke 或本地构建替代。
+
+## 整体审查跟进
+
+用户随后要求按 delegated-change-review 对全部 9 个提交做一次独立只读审查，详见 [审查与裁决记录](../reviews/2026-09-30-delegated-change-review.md)。接受并修复一项 P2：历史 SHA 或写反的 Source/Target 字段可能通过 receipt 校验并错误推进历史。框架现在识别已有当前 revision 标签的矛盾，标签保持可选，未新增 Agent 字段或固定输出模板；原生正文与 JSON 不改写，校验失败仍不重跑 Agent。
+
+修复后 receipt/durable 57 passed、Python 3.11 全套 286 passed，coverage 目标继续满足；workflow lint 与 diff whitespace 检查通过。本次新增一个聚焦修复提交，主题 `fix(agent): reject contradictory receipt revision metadata`；不推送。此次没有重新执行 Python 3.12、Docker 或真实外部发布，以上各阶段的历史证据与本轮验证分开记录。

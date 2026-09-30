@@ -26,6 +26,18 @@ def _positive_id(value: object) -> str | None:
     return text if re.fullmatch(r"[1-9][0-9]*", text) else None
 
 
+def _contradicts_revision(body: str, label: str, revision: str) -> bool:
+    """Recognize optional current-revision labels without requiring a body template."""
+    field = rf"(?:^|[;|])[ \t*`_>#-]*(?:Current[ _-]+)?{label}[ _-]+Revision[ \t*`_]*(?::|：|=|\|)"
+    for match in re.finditer(field, body, re.IGNORECASE | re.MULTILINE):
+        # Keep history and other fields out of the current field's value.
+        value = re.split(r"[\n;|]", body[match.end():], maxsplit=1)[0]
+        sha = re.search(r"(?<![a-zA-Z0-9])(?:[a-fA-F0-9]{64}|[a-fA-F0-9]{40})(?![a-zA-Z0-9])", value)
+        if sha is not None and sha.group() != revision:
+            return True
+    return False
+
+
 def _target_error(payload: dict, request: AgentReviewRequest, note_id: str) -> str | None:
     review = urlparse(request.review_url)
     match = re.search(r"/(?:pull|pulls|issues|merge_requests)/(\d+)/?$", review.path)
@@ -104,7 +116,9 @@ def read_delivery_receipt(
     if body.count(marker) != 1:
         return DeliveryReceipt(raw=raw, error="delivery receipt must contain exactly one review marker")
     for label, revision in (("source", source_revision), ("target", target_revision)):
-        if not revision or not re.search(rf"(?<![a-zA-Z0-9]){re.escape(revision)}(?![a-zA-Z0-9])", body):
+        if (not revision
+                or not re.search(rf"(?<![a-zA-Z0-9]){re.escape(revision)}(?![a-zA-Z0-9])", body)
+                or _contradicts_revision(body, label, revision)):
             return DeliveryReceipt(raw=raw, error=f"delivery receipt does not match {label} revision")
     try:
         error = _target_error(payload, request, note_id)
