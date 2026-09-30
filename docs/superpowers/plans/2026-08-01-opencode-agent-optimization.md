@@ -1,5 +1,7 @@
 # OpenCode Agent and Multi-CLI Review Optimization
 
+> This records the August backend/delivery decisions. Current reliability changes and remaining work are in [ADR-0007](../../adr/0007-trusted-agent-reliability-boundary.md) and the [2026-09-30 plan](../../plans/2026-09-30-reliability-implementation-plan.md). Those documents supersede workspace ownership, cancellation and receipt checks below.
+
 ## Decision summary
 
 The project will retain OpenCode Serve and add explicitly selected Codex CLI, Claude CLI, and Pi CLI backends. The first phase will not perform automatic CLI routing or fan-out. The Agent remains responsible for posting review notes and creating an optional fix MR through an already-authenticated platform CLI; MCP is out of scope.
@@ -35,11 +37,11 @@ backend_timeout: -1
    - If multiple repositories match, prefer the shallowest path, then lexical order.
 3. Fetch the source branch from the source project and the target branch from the target project at job start. Record both revisions and review the source change from their merge base.
 4. If no local repository matches, clone into `clone_parent`.
-5. Ask the Agent to create a temporary Review Worktree under `worktree_parent`. The Agent chooses its child path, branch name and other Git details.
+5. The service creates an exact Source Revision detached Review Worktree inside the job, with independent Git objects. Local CLI cwd is this worktree; OpenCode uses the job root for framework config and receives its worktree path. The Agent chooses fix branches.
 6. Read and execute the single shared review skill.
 7. Review the complete current change from the target/source merge base. Use the previous/source range only to identify newly introduced changes for reporting. Then use the authenticated provider CLI (`glab`, `gh`, or the configured platform equivalent) to create or update the request's Rolling Review Note.
 8. If a fix is clear and unambiguous, apply it and create a stacked fix MR/PR based on `SOURCE_REVISION` and targeting the original source project/source branch. Auto-fix remains enabled by default; it must not silently create a standalone change against the original target branch.
-9. In a `finally`-equivalent cleanup path, remove the Review Worktree. Remove the clone by default; retain it only when configured.
+9. After backend execution has stopped, remove the Review Worktree and apply clone retention. If external execution is uncertain, retain the directory for operator recovery.
 
 The service must never checkout or modify the operator's source working tree directly. Local Agent and platform CLIs use the system installation, authentication, and permissions prepared for the worker account; OpenCode uses its remote execution environment. The service must not manage CLI login, token issuance, authentication refresh, or CLI authorization; it only supplies safe platform CLI example commands through the shared skill.
 
@@ -88,12 +90,12 @@ The service must never checkout or modify the operator's source working tree dir
 - Retry infrastructure failures only when they occur before the Agent starts, with at most three retries and exponential backoff. Never automatically retry a job after the Agent has started, including `failed` and `timed_out`, because delivery may have partially succeeded.
 - Store Agent Result in SQLite without a default application-level size limit. If `agent_result_max_bytes` is explicitly configured, retain its head and tail around an explicit truncation marker and persist `result_truncated=true`.
 - Preserve partial stdout as Agent Result on backend failure and write redacted stderr to `error`; do not merge the streams. Record cleanup failures only in `cleanup_error` without changing the backend-derived Execution Status.
-- When a worker lease expires after the Agent has started, mark the job `failed`, attempt orphan workspace cleanup, and do not requeue it.
-- On SIGTERM, stop claiming, wait for a configurable shutdown grace period, then terminate remaining local Agent process groups with TERM followed by KILL after a bounded grace. Abort remaining OpenCode sessions through the server API. Mark those jobs `failed` and clean up.
+- When a worker lease expires after the Agent has started, mark the job `failed`, retain its workspace for external-execution reconciliation, and do not requeue it.
+- On SIGTERM, stop claiming, wait for a configurable shutdown grace period, then terminate remaining local Agent process groups with TERM followed by KILL after a bounded grace. Abort remaining OpenCode sessions through the server API. Mark those jobs `failed`; clean up only after termination is confirmed.
 - Retain completed Job records and Agent Results for 90 days by default, allow configuration, and delete expired rows in bounded maintenance batches.
 - Create the first Rolling Review Note through the platform CLI and update the stored `previous_review_note_id` on later revisions. Use body files or stdin and complete non-interactive flags in canonical skill examples.
 - Put a deterministic hidden marker in the note and write platform create/update responses to a fixed delivery receipt. Prefer the stored note ID, recover by marker when it is missing or deleted, and create a replacement only when recovery fails. If publication returns only plain text, reconcile by exact marker and accept the receipt only when exactly one current note matches.
-- Keep the receipt as provider-native JSON and parse only note ID and URL in provider adapters. Do not ask the Agent to synthesize normalized receipt JSON.
+- Keep the receipt as provider-native JSON and locally validate the existing marker, full revisions and available target identifiers before extracting note ID and URL. Do not ask the Agent to synthesize normalized receipt JSON.
 - Parse the delivery receipt after every started Agent attempt, even if the backend fails or times out. Advance `previous_reviewed_source_revision` whenever that receipt confirms note creation or update. Keep backend `completed` semantics independent from delivery confirmation.
 - Set Delivery Status to `not_attempted` before Agent start, `confirmed` for a valid native or reconciled receipt, and `unconfirmed` otherwise; never derive it from model prose or use it to overwrite Execution Status.
 - Serialize jobs by review URL while retaining global concurrency across different reviews.

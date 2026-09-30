@@ -120,7 +120,7 @@ def test_unconfirmed_receipt_does_not_advance_history_or_rerun_agent(tmp_path, m
     root.mkdir(parents=True)
     raw = '{"id": 9}'
     (root / '.agent-delivery-receipt.json').write_text(raw)
-    context = WorkspaceContext(root, root, None, 'a' * 40, 'b' * 40, 'f')
+    context = WorkspaceContext(root, root, None, source_revision='a' * 40, source_branch='f', target_revision='b' * 40)
     backend = Mock()
     backend.run.return_value = BackendResult('codex', 'native result')
     monkeypatch.setattr('biz.agent.service._preflight', lambda *_: None)

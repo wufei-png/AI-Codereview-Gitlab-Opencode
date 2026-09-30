@@ -35,7 +35,7 @@
     保证至少返回与原版一致的 review。
   - 详细配置与开销说明见下方 [Agentic Review Mode](#agentic-review-mode-可选)
 - 🤖 External Agent Review 集成
-  - 支持 OpenCode Serve、Codex CLI、Claude CLI，按配置明确选择一个后端
+  - 支持 OpenCode Serve、Codex CLI、Claude CLI、Pi CLI，按配置明确选择一个后端
   - 当收到 GitHub/GitLab/Gitea PR/MR webhook 事件时，自动触发 Agent Review
   - 本地仓库优先，找不到时按配置 clone；每次执行使用一次性 worktree
   - 可与内置 LLM Review 功能并行使用或独立使用
@@ -110,7 +110,7 @@ LLM_REVIEW_ENABLED=1  # 0关闭，1开启
 **2. 启动服务**
 
 ```bash
-docker-compose up -d
+docker compose --env-file conf/.env up --build -d
 ```
 
 **3. 验证部署**
@@ -171,7 +171,7 @@ streamlit run ui.py --server.port=5002 --server.address=0.0.0.0
 
 - URL：http://your-server-ip:5001/review/webhook
 - Trigger Events：勾选 Push Events 和 Merge Request Events (不要勾选其它Event)
-- Secret Token：上面配置的 Access Token(可选)
+- Secret Token：填写与服务 `GITLAB_WEBHOOK_SECRET` 相同的独立 secret（必需；也可用 Standard Webhooks signing token）
 
 **备注**
 
@@ -247,7 +247,7 @@ python -m biz.agent.worker
 
 worker 默认使用与 Web 服务相同的系统账户，也可以由部署系统以独立低权限账户启动。`worker_concurrency` 只设置全局并发；同一个 MR/PR 的 revision 会串行处理。
 
-worker 必须能在 `PATH` 中找到所选 Agent CLI 和平台 CLI；服务只检查可执行文件是否存在，不探测认证或权限。默认 Docker 镜像不替用户安装这些 CLI 或认证环境。
+本地 CLI backend 的 worker 必须能在 `PATH` 中找到所选 Agent CLI 和目标平台 CLI；OpenCode 的平台 CLI 在 Serve 环境中。`python -m biz.agent.worker --check` 检查本地条件，不调用模型或消费 queue，也不探测认证/权限。默认 Docker 镜像不替用户安装这些 CLI 或认证环境。
 
 安全边界说明：External Agent 是被信任的执行者，当前集成用进程参数、临时 job 目录和 disposable source clone 限制正常路径，但不会伪造 Claude/Codex/OpenCode 的 OS 级沙箱。Agent 为了使用已认证的 `glab` / `gh` / Gitea CLI，可能继承操作者提供的 CLI 配置、Git credential helper 或 SSH agent；请在专用低权限用户、容器或仅挂载 job workspace 的 worker 中运行，不要让不可信仓库使用宿主机高权限凭据。项目不负责创建、登录、刷新或托管这些凭据。
 
@@ -275,15 +275,23 @@ backend: opencode
 
 `allowed_remote_hosts` 非空时是严格白名单；未填写时才从 `repo_roots`、`GITLAB_URL`、`GITHUB_URL` 和 `GITEA_URL` 推导默认主机。若请求包含 fork，source、target 和 review URL 的主机都必须通过白名单。
 
-系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。服务在 job 内创建 exact Source Revision 的 detached worktree，Agent 直接使用并选择修复分支；worktree 固定清理，clone 默认也清理，可用 `clone_cleanup` 保留。服务在 Agent 运行前分别从 source 和 target 项目 fetch 最新分支，记录 `SOURCE_REVISION` 与 `TARGET_REVISION`，并以 merge base 审查完整 MR diff；fork 中的同名 target 分支不会替代 upstream。后续 source revision 仍做完整正确性审查，但用上次已交付 revision 到当前 revision 的范围突出新增问题，并更新每个 MR/PR 唯一的 Rolling Review Note。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
+系统先按远程 URL 推导直接路径并确认 `origin` 一致；找不到时只在对应 `repo_roots` 下按 `discovery_max_depth` 递归查找 Git 仓库并确认 remote。仍找不到才 clone 到 `clone_parent`。服务在 job 内创建 exact Source Revision 的 detached worktree，Agent 直接使用并选择修复分支；正常结束或确认已停止的 backend 会清理 worktree，clone 默认也清理，可用 `clone_cleanup` 保留；外部执行未确认停止时保留目录，见恢复 runbook。服务在 Agent 运行前分别从 source 和 target 项目 fetch 最新分支，记录 `SOURCE_REVISION` 与 `TARGET_REVISION`，并以 merge base 审查完整 MR diff；fork 中的同名 target 分支不会替代 upstream。后续 source revision 仍做完整正确性审查，但用上次已交付 revision 到当前 revision 的范围突出新增问题，并更新每个 MR/PR 唯一的 Rolling Review Note。Agent 实际拿到的是 job 目录内的 disposable source clone 和 skill 副本，原始本地仓库不会作为 CLI 的可写目录暴露。
 
 自动修复默认开启，规则位于共享 skill 的 `## Auto-fix policy (enabled by default)`。修复会创建基于 `SOURCE_REVISION`、目标为原始 source project/source branch 的 stacked fix MR/PR；不会默认创建指向原始 target branch 的独立替代变更。如果只想审查、不自动修复，请在运行前使用不含该段的 skill 副本；不要让 Agent 在 job 中修改 canonical skill。
 
 默认 `AGENT_BACKEND_TIMEOUT=-1`，只表示 Agent 执行不限时；clone/fetch、OpenCode 会话建立和清理仍有独立正数 timeout。其他配置包括 `AGENT_WORKER_CONCURRENCY`、`AGENT_WORKER_SHUTDOWN_GRACE`、`AGENT_JOB_RETENTION_DAYS` 和可选的 `AGENT_RESULT_MAX_BYTES`。结果默认不限制大小；显式设置上限后保留头尾并记录截断。Job/结果默认保留 90 天。
 
-SQLite queue 在 webhook hints 和实际 fetch 后的 source/target revision 两层做幂等。Agent 启动前的临时基础设施失败最多指数退避重试三次；Agent 一旦启动就不自动重试，避免重复交付。Execution Status 与 Delivery Status 分离：backend 退出 0 得到 `completed`，只有有效的平台原生 delivery receipt，或唯一 marker reconciliation 生成的 provider-native receipt，才得到 `confirmed`；纯文本“评论成功”不会直接推进 rolling history。
+SQLite queue 在 webhook hints 和实际 fetch 后的 source/target revision 两层做幂等。Agent 启动前的临时基础设施失败最多指数退避重试三次；Agent 一旦启动就不自动重试，避免重复交付。Execution Status 与 Delivery Status 分离：backend 退出 0 得到 `completed`，只有本地校验通过的原生 delivery receipt 才得到 `confirmed`：正 note ID、唯一 exact hidden marker、完整 Source/Target Revision，以及可识别的目标信息必须匹配；原文保留，错误独立写 `delivery_error`。Agent 可通过唯一 marker reconciliation 得到同样的原生 receipt；纯文本“评论成功”不会推进 rolling history。confirmed 是受信 Agent 的匹配报告，没有 provider readback。
 
-Lease heartbeat 和 token fencing 会阻止正常的过期任务继续更新 job 状态；若宿主进程本身失联但其外部 Agent 子进程仍未退出，无法从 SQLite 中撤销已经发出的平台 CLI/OpenCode 网络副作用。生产部署应使用 backend timeout、专用 worker 和平台侧幂等/人工检查处理这一极端残余风险。
+Lease heartbeat 失败或 token 丢失会触发该 job 的 backend 取消；未知外部执行的过期 job 保留目录并进入人工恢复，不自动重跑。SQLite 无法撤销已发出的平台操作，具体步骤见 [worker runbook](docs/operations/agent-worker.md)。
+
+## 验证与发布
+
+PR/main CI 安装 `requirements.txt`，运行 Python 3.11/3.12 pytest 与 Agent coverage 报告，并 build Docker 镜像，断网执行非 root、临时 DB、fake backend smoke。`v*` tag 的镜像发布先调用同一 SHA 的 CI gate，通过后才取得 packages 写权限。外部 Actions 固定到已核实的 commit SHA。该门禁不证明真实 CLI/模型/平台发布；这需要另行在测试仓库和已认证身份上验证。
+
+本地检查：`python -m pytest -q --cov=biz.agent --cov-report=term-missing`。Docker smoke 命令见 operations。当前 pyproject 的依赖列表为空，`uv.lock` 不代替运行依赖；使用 requirements 安装。本轮保留内置 LLM/agentic 的非持久化 multiprocessing queue，External Agent 才使用 SQLite durable queue；没有额外 replay ledger。
+
+当前能力、已完成阶段与延后需求见 [provider matrix](docs/providers/capability-matrix.md)、[ADR-0007](docs/adr/0007-trusted-agent-reliability-boundary.md) 和 [实施记录](docs/plans/2026-09-30-reliability-implementation-plan.md)。
 
 ## 常见问题
 

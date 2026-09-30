@@ -1,6 +1,6 @@
 # 受信 Agent 的可靠性改造计划
 
-日期：2026-09-30。状态：**已确认并授权实施**。本轮先收敛项目文档，再直接按阶段实施；不生成 `/tmp` 提示词。各阶段遵循 `implement-in-stages`，检查通过后各自提交；不推送。
+日期：2026-09-30。状态：**已确认并授权实施；阶段 1–7 已完成**。本轮先收敛项目文档，再直接按阶段实施；不生成 `/tmp` 提示词。各阶段遵循 `implement-in-stages`，检查通过后各自提交；不推送。
 
 ## 接手与基线
 
@@ -140,11 +140,18 @@ June 文档明确 historical/superseded；August 文档引用新 ADR，不按旧
 
 | 阶段 | 状态 | 提交/检查/限制 |
 | --- | --- | --- |
-| 计划与 ADR | 已写入 | 用户确认设计并授权实施；基线与 149 项测试已核对 |
-| 1 入口与 CI | 已完成 | route/security 42 passed；全套 183 passed；CI 已配置，GitHub 执行待推送后验证 |
-| 2 HTTP/capability | 已完成 | provider/resolver 36 passed；全套 216 passed；三平台 fork source 解析修复；无 live provider smoke |
-| 3 取消/lifecycle | 已完成 | worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
-| 4 worktree | 已完成 | workspace 6 passed；全套 233 passed；含借用 alternates 的 local seed 与 fork；CLI cwd 固定 SHA，OpenCode job 根加载配置；无 live backend smoke |
-| 5 receipt | 已完成 | receipt/durable 41 passed；全套 264 passed；三平台 native 回执、本地快照匹配与 failed+confirmed；原文和独立 delivery_error 入库；未做 provider readback |
-| 6 operations | 已完成 | worker/startup/deployment 17 passed；全套 270 passed；Docker arm64 build、断网非 root fake-worker/API smoke、Supervisor API/UI health 均通过；未消费真实 queue/调用模型 |
-| 7 release/docs | 待实施 | |
+| 计划与 ADR | 已写入 | `272b6ee`；用户确认设计并授权实施；基线与 149 项测试已核对 |
+| 1 入口与 CI | 已完成 | `0e9858b`；route/security 42 passed；全套 183 passed；CI 已配置，GitHub 执行待推送后验证 |
+| 2 HTTP/capability | 已完成 | `ac88fb5`；provider/resolver 36 passed；全套 216 passed；三平台 fork source 解析修复；无 live provider smoke |
+| 3 取消/lifecycle | 已完成 | `6bcb498`；worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
+| 4 worktree | 已完成 | `a11c966`；workspace 6 passed；全套 233 passed；含借用 alternates 的 local seed 与 fork；CLI cwd 固定 SHA，OpenCode job 根加载配置；无 live backend smoke |
+| 5 receipt | 已完成 | `a53adba`；receipt/durable 41 passed；全套 264 passed；三平台 native 回执、本地快照匹配与 failed+confirmed；原文和独立 delivery_error 入库；未做 provider readback |
+| 6 operations | 已完成 | `4ce9b9b`；worker/startup/deployment 17 passed；全套 270 passed；Docker arm64 build、断网非 root fake-worker/API smoke、Supervisor API/UI health 均通过；未消费真实 queue/调用模型 |
+| 7 release/docs | 已完成 | 提交主题 `ci: gate image publication and reconcile current documentation`；Python 3.11/3.12 各 270 passed；Linux image 269 passed/1 skipped（无 Docker CLI）；coverage 85%、runner 94%、safety 100%；Actions refs 已查上游；workflow lint 通过；GitHub 执行/实际发布尚未发生 |
+
+
+最终验证：`.venv/bin/python -m pytest -q --cov=biz.agent --cov-report=term-missing`，270 passed，Agent 85%（目标 80%）、runner 94%（目标 90%）、safety 100%（目标 100%），均达原有目标；worker 从基线 0% 到 87%。Python 3.12 使用 `/tmp` 中本仓库专用临时 venv，按 requirements 新安装后 270 passed，环境已移除。没有使用其他项目的 venv/lock 作为证据。
+
+Docker arm64 使用当前 Dockerfile 构建成功；非 root `1000:1000`、断网、tmpfs/临时 DB 的 fake-worker/API smoke 与 Supervisor API/UI health 通过。基础镜像中挂载 tests/pytest.ini 后断网全套为 269 passed、1 skipped：Compose test 缺容器内 Docker CLI，其宿主测试已通过。CI 将在 Ubuntu 上检查 Python 3.11/3.12 与 Docker（amd64），真实 GitHub runner 和多架构 registry publication 尚未执行，不能把本地 arm64 build 当作远端发布结果。
+
+所有外部 Action SHA 于 2026-09-30 用官方仓库 `git ls-remote` 核对对应 v4/v5/v3/v6 tags。workflow 静态检查使用 `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.10 .github/workflows/ci.yml .github/workflows/build_images.yml`；v1.7.12 要求 Go 1.25，本机 Go 1.24，因此使用仍支持当前语法的 v1.7.10。阶段 7 的自引用提交用主题记录，可通过 `git log -1 --format=%h --grep='^ci: gate image publication and reconcile current documentation$'` 查到。

@@ -1,8 +1,10 @@
 # Agentic Code Review Design
 
 - **Date**: 2026-06-22
-- **Status**: Approved (pending implementation)
+- **Status**: Historical; original agentic path implemented. Some details changed during implementation.
 - **Author**: brainstorm session with user
+
+> Current authority: [ADR-0007](../../adr/0007-trusted-agent-reliability-boundary.md) and [2026-09-30 implementation plan](../../plans/2026-09-30-reliability-implementation-plan.md). Do not turn historical goals/checklists into new work without checking current code.
 
 ## 1. Background & Motivation
 

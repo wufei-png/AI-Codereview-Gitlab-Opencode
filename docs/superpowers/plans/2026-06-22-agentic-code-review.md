@@ -1,6 +1,6 @@
 # Agentic Code Review Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical design/implementation record. The existing agentic path has been implemented. Unchecked boxes are not a current backlog or an instruction to execute this file. For current decisions, constraints, priorities and independent session handoff use [ADR-0007](../../adr/0007-trusted-agent-reliability-boundary.md) and the [2026-09-30 plan](../../plans/2026-09-30-reliability-implementation-plan.md).
 
 **Goal:** Add a second review strategy (`agentic`) that lets the LLM explore the whole project via tool-use, alongside the existing `diff_only` strategy. One strategy per deployment, chosen via `REVIEW_STRATEGY` env var.
 
