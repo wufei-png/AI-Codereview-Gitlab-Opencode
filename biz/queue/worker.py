@@ -22,7 +22,7 @@ def _resolve_repo_for_event(webhook_data: dict, gitlab_url: str = "") -> tuple[s
     """
     # GitLab MR
     if webhook_data.get("object_kind") == "merge_request":
-        repo = webhook_data.get("project", {})
+        repo = webhook_data.get("source") or webhook_data.get("source_project") or (webhook_data.get("object_attributes") or {}).get("source") or webhook_data.get("project", {})
         path = repo.get("path_with_namespace") or repo.get("name")
         url = repo.get("git_http_url") or repo.get("url") or (gitlab_url.rstrip("/") + "/" + path if path and gitlab_url else None)
         attrs = webhook_data.get("object_attributes", {})
@@ -42,7 +42,7 @@ def _resolve_repo_for_event(webhook_data: dict, gitlab_url: str = "") -> tuple[s
         return None, None, None
     # GitHub
     if "repository" in webhook_data and "pull_request" in webhook_data:
-        repo = webhook_data["repository"]
+        repo = (webhook_data["pull_request"].get("head") or {}).get("repo") or webhook_data["repository"]
         url = repo.get("clone_url") or repo.get("html_url")
         path = repo.get("full_name")
         pr = webhook_data["pull_request"]
@@ -58,7 +58,7 @@ def _resolve_repo_for_event(webhook_data: dict, gitlab_url: str = "") -> tuple[s
         if path and url and ref:
             return url, path, ref
         return None, None, None
-    # Gitea (similar shape to GitHub but `pusher` may be present).
+    # GitHub-shaped Gitea PR/push payloads are handled above.
     return None, None, None
 
 

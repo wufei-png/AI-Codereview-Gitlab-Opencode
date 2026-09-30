@@ -3,7 +3,7 @@ import re
 import time
 from urllib.parse import urljoin
 import fnmatch
-import requests
+from biz.platforms import http as provider_http
 
 from biz.utils.log import logger
 
@@ -89,9 +89,9 @@ class MergeRequestHandler:
             headers = {
                 'Private-Token': self.gitlab_token
             }
-            response = requests.get(url, headers=headers, verify=False)
+            response = provider_http.get(url, headers=headers)
             logger.debug(
-                f"Get changes response from GitLab (attempt {attempt + 1}): {response.status_code}, {response.text}, URL: {url}")
+                f"Get changes response from GitLab (attempt {attempt + 1}): {response.status_code}, URL: {url}")
 
             # 检查请求是否成功
             if response.status_code == 200:
@@ -103,7 +103,7 @@ class MergeRequestHandler:
                         f"Changes is empty, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries}), URL: {url}")
                     time.sleep(retry_delay)
             else:
-                logger.warn(f"Failed to get changes from GitLab (URL: {url}): {response.status_code}, {response.text}")
+                logger.warn(f"Failed to get changes from GitLab (URL: {url}): {response.status_code}")
                 return []
 
         logger.warning(f"Max retries ({max_retries}) reached. Changes is still empty.")
@@ -120,13 +120,13 @@ class MergeRequestHandler:
         headers = {
             'Private-Token': self.gitlab_token
         }
-        response = requests.get(url, headers=headers, verify=False)
-        logger.debug(f"Get commits response from gitlab: {response.status_code}, {response.text}")
+        response = provider_http.get(url, headers=headers)
+        logger.debug(f"Get commits response from gitlab: {response.status_code}")
         # 检查请求是否成功
         if response.status_code == 200:
             return response.json()
         else:
-            logger.warn(f"Failed to get commits: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get commits: {response.status_code}")
             return []
 
     def add_merge_request_notes(self, review_result):
@@ -139,13 +139,12 @@ class MergeRequestHandler:
         data = {
             'body': review_result
         }
-        response = requests.post(url, headers=headers, json=data, verify=False)
-        logger.debug(f"Add notes to gitlab {url}: {response.status_code}, {response.text}")
+        response = provider_http.post(url, headers=headers, json=data)
+        logger.debug(f"Add notes to gitlab {url}: {response.status_code}")
         if response.status_code == 201:
             logger.info("Note successfully added to merge request.")
         else:
             logger.error(f"Failed to add note: {response.status_code}")
-            logger.error(response.text)
 
     def target_branch_protected(self) -> bool:
         url = urljoin(f"{self.gitlab_url}/",
@@ -154,15 +153,15 @@ class MergeRequestHandler:
             'Private-Token': self.gitlab_token,
             'Content-Type': 'application/json'
         }
-        response = requests.get(url, headers=headers, verify=False)
-        logger.debug(f"Get protected branches response from gitlab: {response.status_code}, {response.text}")
+        response = provider_http.get(url, headers=headers)
+        logger.debug(f"Get protected branches response from gitlab: {response.status_code}")
         # 检查请求是否成功
         if response.status_code == 200:
             data = response.json()
             target_branch = self.webhook_data['object_attributes']['target_branch']
             return any(fnmatch.fnmatch(target_branch, item['name']) for item in data)
         else:
-            logger.warn(f"Failed to get protected branches: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get protected branches: {response.status_code}")
             return False
 
 
@@ -232,13 +231,12 @@ class PushHandler:
         data = {
             'note': message
         }
-        response = requests.post(url, headers=headers, json=data, verify=False)
-        logger.debug(f"Add comment to commit {last_commit_id}: {response.status_code}, {response.text}")
+        response = provider_http.post(url, headers=headers, json=data)
+        logger.debug(f"Add comment to commit {last_commit_id}: {response.status_code}")
         if response.status_code == 201:
             logger.info("Comment successfully added to push commit.")
         else:
             logger.error(f"Failed to add comment: {response.status_code}")
-            logger.error(response.text)
 
     def __repository_commits(self, ref_name: str = "", since: str = "", until: str = "", pre_page: int = 100,
                              page: int = 1):
@@ -247,15 +245,15 @@ class PushHandler:
         headers = {
             'Private-Token': self.gitlab_token
         }
-        response = requests.get(url, headers=headers, verify=False)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get commits response from GitLab for repository_commits: {response.status_code}, {response.text}, URL: {url}")
+            f"Get commits response from GitLab for repository_commits: {response.status_code}, URL: {url}")
 
         if response.status_code == 200:
             return response.json()
         else:
             logger.warn(
-                f"Failed to get commits for ref {ref_name}: {response.status_code}, {response.text}")
+                f"Failed to get commits for ref {ref_name}: {response.status_code}")
             return []
 
     def repository_compare(self, before: str, after: str):
@@ -264,15 +262,15 @@ class PushHandler:
         headers = {
             'Private-Token': self.gitlab_token
         }
-        response = requests.get(url, headers=headers, verify=False)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get changes response from GitLab for repository_compare: {response.status_code}, {response.text}, URL: {url}")
+            f"Get changes response from GitLab for repository_compare: {response.status_code}, URL: {url}")
 
         if response.status_code == 200:
             return response.json().get('diffs', [])
         else:
             logger.warn(
-                f"Failed to get changes for repository_compare: {response.status_code}, {response.text}")
+                f"Failed to get changes for repository_compare: {response.status_code}")
             return []
 
     def get_commit_diff(self, commit_sha: str):
@@ -281,15 +279,15 @@ class PushHandler:
         headers = {
             'Private-Token': self.gitlab_token
         }
-        response = requests.get(url, headers=headers, verify=False)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get commit diff response from GitLab: {response.status_code}, {response.text}, URL: {url}")
+            f"Get commit diff response from GitLab: {response.status_code}, URL: {url}")
 
         if response.status_code == 200:
             return response.json()
         else:
             logger.warn(
-                f"Failed to get commit diff for {commit_sha}: {response.status_code}, {response.text}")
+                f"Failed to get commit diff for {commit_sha}: {response.status_code}")
             return []
 
     def get_push_changes(self) -> list:

@@ -4,7 +4,7 @@ import time
 from urllib.parse import urljoin
 
 import fnmatch
-import requests
+from biz.platforms import http as provider_http
 
 from biz.utils.log import logger
 
@@ -105,9 +105,9 @@ class PullRequestHandler:
         url = urljoin(f"{self.gitea_url}/", endpoint)
 
         for attempt in range(max_retries):
-            response = requests.get(url, headers=self._headers(), verify=False)
+            response = provider_http.get(url, headers=self._headers())
             logger.debug(
-                f"Get changes response from Gitea (attempt {attempt + 1}): {response.status_code}, {response.text}, URL: {url}")
+                f"Get changes response from Gitea (attempt {attempt + 1}): {response.status_code}, URL: {url}")
 
             if response.status_code == 200:
                 files = response.json() or []
@@ -126,7 +126,7 @@ class PullRequestHandler:
                     f"Changes is empty, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries}), URL: {url}")
                 time.sleep(retry_delay)
             else:
-                logger.warn(f"Failed to get changes from Gitea (URL: {url}): {response.status_code}, {response.text}")
+                logger.warn(f"Failed to get changes from Gitea (URL: {url}): {response.status_code}")
                 return []
 
         logger.warning(f"Max retries ({max_retries}) reached. Changes is still empty.")
@@ -142,8 +142,8 @@ class PullRequestHandler:
 
         endpoint = f"api/v1/repos/{self.repo_full_name}/pulls/{self.pull_request_index}/commits"
         url = urljoin(f"{self.gitea_url}/", endpoint)
-        response = requests.get(url, headers=self._headers(), verify=False)
-        logger.debug(f"Get commits response from Gitea: {response.status_code}, {response.text}")
+        response = provider_http.get(url, headers=self._headers())
+        logger.debug(f"Get commits response from Gitea: {response.status_code}")
 
         if response.status_code == 200:
             commits = response.json() or []
@@ -162,7 +162,7 @@ class PullRequestHandler:
                 })
             return formatted_commits
         else:
-            logger.warn(f"Failed to get commits from Gitea: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get commits from Gitea: {response.status_code}")
             return []
 
     def add_pull_request_notes(self, review_result: str):
@@ -172,14 +172,13 @@ class PullRequestHandler:
 
         endpoint = f"api/v1/repos/{self.repo_full_name}/issues/{self.pull_request_index}/comments"
         url = urljoin(f"{self.gitea_url}/", endpoint)
-        response = requests.post(url, headers=self._headers(), json={'body': review_result}, verify=False)
-        logger.debug(f"Add comment to Gitea pull request {url}: {response.status_code}, {response.text}")
+        response = provider_http.post(url, headers=self._headers(), json={'body': review_result})
+        logger.debug(f"Add comment to Gitea pull request {url}: {response.status_code}")
 
         if response.status_code == 201:
             logger.info("Comment successfully added to Gitea pull request.")
         else:
             logger.error(f"Failed to add comment to Gitea pull request: {response.status_code}")
-            logger.error(response.text)
 
     def target_branch_protected(self) -> bool:
         if not self.repo_full_name or not self.target_branch:
@@ -187,14 +186,14 @@ class PullRequestHandler:
 
         endpoint = f"api/v1/repos/{self.repo_full_name}/branches?protected=true"
         url = urljoin(f"{self.gitea_url}/", endpoint)
-        response = requests.get(url, headers=self._headers(), verify=False)
-        logger.debug(f"Get protected branches response from Gitea: {response.status_code}, {response.text}")
+        response = provider_http.get(url, headers=self._headers())
+        logger.debug(f"Get protected branches response from Gitea: {response.status_code}")
 
         if response.status_code == 200:
             branches = response.json() or []
             return any(fnmatch.fnmatch(self.target_branch, branch.get('name', '')) for branch in branches)
         else:
-            logger.warn(f"Failed to get protected branches from Gitea: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get protected branches from Gitea: {response.status_code}")
             return False
 
 
@@ -249,33 +248,9 @@ class PushHandler:
         logger.info(f"Collected {len(commit_details)} commits from Gitea push event.")
         return commit_details
 
-    def add_push_notes(self, message: str):
-        # if not self.commit_list:
-        #     logger.warn("No commits found to add comments to.")
-        #     return
-
-        # if not self.repo_full_name:
-        #     logger.error("Missing repository information for adding push comments.")
-        #     return
-
-        # last_commit_id = self.commit_list[-1].get('id')
-        # if not last_commit_id:
-        #     logger.error("Last commit ID not found in Gitea push event.")
-        #     return
-
-        # endpoint = f"api/v1/repos/{self.repo_full_name}/git/commits/{last_commit_id}/comments"
-        # url = urljoin(f"{self.gitea_url}/", endpoint)
-        # response = requests.post(url, headers=self._headers(), json={'body': message}, verify=False)
-        # logger.debug(f"Add comment to Gitea commit {last_commit_id}: {response.status_code}, {response.text}")
-
-        # if response.status_code == 201:
-        #     logger.info("Comment successfully added to Gitea commit.")
-        # else:
-        #     logger.error(f"Failed to add comment to Gitea commit: {response.status_code}")
-        #     logger.error(response.text)
-
-        # TODO 官方暂未提供添加评论的API，暂时先注释掉
-        return
+    def add_push_notes(self, message: str) -> bool:
+        logger.warning("Gitea push comment delivery is unsupported; review remains available in notifications/dashboard")
+        return False
 
     def _get_commit_diff(self, commit_id: str) -> str:
         if not commit_id or not self.repo_full_name:
@@ -283,12 +258,12 @@ class PushHandler:
 
         endpoint = f"api/v1/repos/{self.repo_full_name}/git/commits/{commit_id}.diff"
         url = urljoin(f"{self.gitea_url}/", endpoint)
-        response = requests.get(url, headers=self._headers(), verify=False)
+        response = provider_http.get(url, headers=self._headers())
         logger.debug(
             f"Get commit diff from Gitea: {response.status_code}, {url}")
         if response.status_code == 200:
             return response.text or ""
-        logger.warn(f"Failed to get commit diff from Gitea: {response.status_code}, {response.text}")
+        logger.warn(f"Failed to get commit diff from Gitea: {response.status_code}")
         return ""
 
     @staticmethod

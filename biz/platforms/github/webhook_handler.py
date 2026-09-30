@@ -2,7 +2,7 @@ import os
 import re
 import time
 
-import requests
+from biz.platforms import http as provider_http
 import fnmatch
 from biz.utils.log import logger
 
@@ -61,6 +61,7 @@ class PullRequestHandler:
         self.webhook_data = webhook_data
         self.github_token = github_token
         self.github_url = github_url
+        self.api_url = os.getenv("GITHUB_API_URL", "https://api.github.com").rstrip("/")
         self.event_type = None
         self.repo_full_name = None
         self.action = None
@@ -88,14 +89,14 @@ class PullRequestHandler:
         retry_delay = 10  # 重试间隔时间（秒）
         for attempt in range(max_retries):
             # 调用 GitHub API 获取 Pull Request 的 files（变更）
-            url = f"https://api.github.com/repos/{self.repo_full_name}/pulls/{self.pull_request_number}/files"
+            url = f"{self.api_url}/repos/{self.repo_full_name}/pulls/{self.pull_request_number}/files"
             headers = {
                 'Authorization': f'token {self.github_token}',
                 'Accept': 'application/vnd.github.v3+json'
             }
-            response = requests.get(url, headers=headers)
+            response = provider_http.get(url, headers=headers)
             logger.debug(
-                f"Get changes response from GitHub (attempt {attempt + 1}): {response.status_code}, {response.text}, URL: {url}")
+                f"Get changes response from GitHub (attempt {attempt + 1}): {response.status_code}, URL: {url}")
 
             # 检查请求是否成功
             if response.status_code == 200:
@@ -118,7 +119,7 @@ class PullRequestHandler:
                         f"Changes is empty, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries}), URL: {url}")
                     time.sleep(retry_delay)
             else:
-                logger.warn(f"Failed to get changes from GitHub (URL: {url}): {response.status_code}, {response.text}")
+                logger.warn(f"Failed to get changes from GitHub (URL: {url}): {response.status_code}")
                 return []
 
         logger.warning(f"Max retries ({max_retries}) reached. Changes is still empty.")
@@ -130,13 +131,13 @@ class PullRequestHandler:
             return []
 
         # 调用 GitHub API 获取 Pull Request 的 commits
-        url = f"https://api.github.com/repos/{self.repo_full_name}/pulls/{self.pull_request_number}/commits"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/pulls/{self.pull_request_number}/commits"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
-        response = requests.get(url, headers=headers)
-        logger.debug(f"Get commits response from GitHub: {response.status_code}, {response.text}")
+        response = provider_http.get(url, headers=headers)
+        logger.debug(f"Get commits response from GitHub: {response.status_code}")
         
         # 检查请求是否成功
         if response.status_code == 200:
@@ -156,11 +157,11 @@ class PullRequestHandler:
                 gitlab_format_commits.append(gitlab_commit)
             return gitlab_format_commits
         else:
-            logger.warn(f"Failed to get commits: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get commits: {response.status_code}")
             return []
 
     def add_pull_request_notes(self, review_result):
-        url = f"https://api.github.com/repos/{self.repo_full_name}/issues/{self.pull_request_number}/comments"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/issues/{self.pull_request_number}/comments"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
@@ -168,28 +169,27 @@ class PullRequestHandler:
         data = {
             'body': review_result
         }
-        response = requests.post(url, headers=headers, json=data)
-        logger.debug(f"Add comment to GitHub PR {url}: {response.status_code}, {response.text}")
+        response = provider_http.post(url, headers=headers, json=data)
+        logger.debug(f"Add comment to GitHub PR {url}: {response.status_code}")
         if response.status_code == 201:
             logger.info("Comment successfully added to pull request.")
         else:
             logger.error(f"Failed to add comment: {response.status_code}")
-            logger.error(response.text)
 
     def target_branch_protected(self) -> bool:
-        url = f"https://api.github.com/repos/{self.repo_full_name}/branches?protected=true"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/branches?protected=true"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
 
-        response = requests.get(url, headers=headers)
+        response = provider_http.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
             target_branch = self.webhook_data['pull_request']['base']['ref']
             return any(fnmatch.fnmatch(target_branch, item['name']) for item in data)
         else:
-            logger.warn(f"Failed to get protected branches: {response.status_code}, {response.text}")
+            logger.warn(f"Failed to get protected branches: {response.status_code}")
             return False
 
 
@@ -198,6 +198,7 @@ class PushHandler:
         self.webhook_data = webhook_data
         self.github_token = github_token
         self.github_url = github_url
+        self.api_url = os.getenv("GITHUB_API_URL", "https://api.github.com").rstrip("/")
         self.event_type = None
         self.repo_full_name = None
         self.branch_name = None
@@ -247,7 +248,7 @@ class PushHandler:
             logger.error("Last commit ID not found.")
             return
 
-        url = f"https://api.github.com/repos/{self.repo_full_name}/commits/{last_commit_id}/comments"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/commits/{last_commit_id}/comments"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
@@ -255,41 +256,40 @@ class PushHandler:
         data = {
             'body': message
         }
-        response = requests.post(url, headers=headers, json=data)
-        logger.debug(f"Add comment to commit {last_commit_id}: {response.status_code}, {response.text}")
+        response = provider_http.post(url, headers=headers, json=data)
+        logger.debug(f"Add comment to commit {last_commit_id}: {response.status_code}")
         if response.status_code == 201:
             logger.info("Comment successfully added to push commit.")
         else:
             logger.error(f"Failed to add comment: {response.status_code}")
-            logger.error(response.text)
 
     def __repository_commits(self, sha: str = "", per_page: int = 100, page: int = 1):
         # 获取仓库提交信息
-        url = f"https://api.github.com/repos/{self.repo_full_name}/commits?sha={sha}&per_page={per_page}&page={page}"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/commits?sha={sha}&per_page={per_page}&page={page}"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
-        response = requests.get(url, headers=headers)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get commits response from GitHub for repository_commits: {response.status_code}, {response.text}, URL: {url}")
+            f"Get commits response from GitHub for repository_commits: {response.status_code}, URL: {url}")
 
         if response.status_code == 200:
             return response.json()
         else:
             logger.warn(
-                f"Failed to get commits for sha {sha}: {response.status_code}, {response.text}")
+                f"Failed to get commits for sha {sha}: {response.status_code}")
             return []
 
     def get_parent_commit_id(self, commit_id: str) -> str:
-        url = f"https://api.github.com/repos/{self.repo_full_name}/commits/{commit_id}"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/commits/{commit_id}"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
-        response = requests.get(url, headers=headers)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get commit response from GitHub: {response.status_code}, {response.text}, URL: {url}")
+            f"Get commit response from GitHub: {response.status_code}, URL: {url}")
 
         if response.status_code == 200 and response.json().get('parents'):
             return response.json().get('parents')[0].get('sha', '')
@@ -297,14 +297,14 @@ class PushHandler:
 
     def repository_compare(self, base: str, head: str):
         # 比较两个提交之间的差异
-        url = f"https://api.github.com/repos/{self.repo_full_name}/compare/{base}...{head}"
+        url = f"{self.api_url}/repos/{self.repo_full_name}/compare/{base}...{head}"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
-        response = requests.get(url, headers=headers)
+        response = provider_http.get(url, headers=headers)
         logger.debug(
-            f"Get changes response from GitHub for repository_compare: {response.status_code}, {response.text}, URL: {url}")
+            f"Get changes response from GitHub for repository_compare: {response.status_code}, URL: {url}")
 
         if response.status_code == 200:
             # 转换为GitLab格式的diffs
@@ -323,7 +323,7 @@ class PushHandler:
             return diffs
         else:
             logger.warn(
-                f"Failed to get changes for repository_compare: {response.status_code}, {response.text}")
+                f"Failed to get changes for repository_compare: {response.status_code}")
             return []
 
     def get_push_changes(self) -> list:
