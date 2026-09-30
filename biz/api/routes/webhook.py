@@ -2,7 +2,6 @@
 Webhook 路由模块
 """
 
-import json
 import os
 from urllib.parse import urlparse
 from flask import Blueprint, request, jsonify
@@ -36,33 +35,26 @@ def handle_webhook():
     """
     处理 Webhook 请求的主路由
     """
-    # 获取请求的JSON数据
-    if request.is_json:
-        if is_agent_review_enabled():
-            if request.headers.get("X-Gitea-Event"):
-                provider = "gitea"
-            elif request.headers.get("X-GitHub-Event"):
-                provider = "github"
-            else:
-                provider = "gitlab"
-            if not verify_webhook(provider, request.headers, request.get_data(cache=True)):
-                return jsonify({"error": "Invalid webhook signature or secret"}), 401
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Invalid JSON"}), 400
-
-        # 判断webhook来源
-        webhook_source_github = request.headers.get("X-GitHub-Event")
-        webhook_source_gitea = request.headers.get("X-Gitea-Event")
-
-        if webhook_source_gitea:  # Gitea webhook优先处理
-            return handle_gitea_webhook(webhook_source_gitea, data)
-        elif webhook_source_github:  # GitHub webhook
-            return handle_github_webhook(webhook_source_github, data)
-        else:  # GitLab webhook
-            return handle_gitlab_webhook(data)
-    else:
+    if not request.is_json:
         return jsonify({"message": "Invalid data format"}), 400
+    github_event = request.headers.get("X-GitHub-Event")
+    gitea_event = request.headers.get("X-Gitea-Event")
+    provider = "gitea" if gitea_event else "github" if github_event else "gitlab"
+    if not verify_webhook(provider, request.headers, request.get_data(cache=True)):
+        return jsonify({"error": "Invalid webhook signature or secret"}), 401
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+    if gitea_event:
+        return handle_gitea_webhook(gitea_event, data)
+    if github_event:
+        return handle_github_webhook(github_event, data)
+    return handle_gitlab_webhook(data)
+
+
+def _queue_builtin(function, data, token, url, url_slug) -> None:
+    if _builtin_review_enabled():
+        handle_queue(function, data, token, url, url_slug)
 
 
 def handle_github_webhook(event_type, data):
@@ -70,26 +62,22 @@ def handle_github_webhook(event_type, data):
     处理 GitHub Webhook
     """
     # 获取GitHub配置
-    github_token = os.getenv("GITHUB_ACCESS_TOKEN") or request.headers.get(
-        "X-GitHub-Token"
-    )
+    github_token = os.getenv("GITHUB_ACCESS_TOKEN")
     if not github_token and _builtin_review_enabled():
         return jsonify({"message": "Missing GitHub access token"}), 400
 
     github_url = os.getenv("GITHUB_URL") or "https://github.com"
     github_url_slug = slugify_url(github_url)
 
-    # 打印整个payload数据
     logger.info(f"Received GitHub event: {event_type}")
-    logger.info(f"Payload: {json.dumps(data)}")
 
     if event_type == "pull_request":
         # 异步触发显式配置的外部 Agent backend。
         if is_agent_review_enabled():
             handle_agent_queue(dispatch_agent_review, "github", data)
-        
+
         # 使用handle_queue进行异步处理
-        handle_queue(
+        _queue_builtin(
             handle_github_pull_request_event,
             data,
             github_token,
@@ -104,7 +92,7 @@ def handle_github_webhook(event_type, data):
         ), 200
     elif event_type == "push":
         # 使用handle_queue进行异步处理
-        handle_queue(
+        _queue_builtin(
             handle_github_push_event, data, github_token, github_url, github_url_slug
         )
         # 立马返回响应
@@ -140,28 +128,24 @@ def handle_gitlab_webhook(data):
         except Exception as e:
             return jsonify({"error": f"Failed to parse homepage URL: {str(e)}"}), 400
 
-    # 优先从环境变量获取，如果没有，则从请求头获取
-    gitlab_token = os.getenv("GITLAB_ACCESS_TOKEN") or request.headers.get(
-        "X-Gitlab-Token"
-    )
+    # 平台 API 凭据来自服务配置，不复用 webhook secret。
+    gitlab_token = os.getenv("GITLAB_ACCESS_TOKEN")
     # 如果gitlab_token为空，返回错误
     if not gitlab_token and _builtin_review_enabled():
         return jsonify({"message": "Missing GitLab access token"}), 400
 
     gitlab_url_slug = slugify_url(gitlab_url)
 
-    # 打印整个payload数据，或根据需求进行处理
     logger.info(f"Received event: {object_kind}")
-    logger.info(f"Payload: {json.dumps(data)}")
 
     # 处理Merge Request Hook
     if object_kind == "merge_request":
         # 异步触发显式配置的外部 Agent backend。
         if is_agent_review_enabled():
             handle_agent_queue(dispatch_agent_review, "gitlab", data, gitlab_url=gitlab_url)
-        
+
         # 创建一个新进程进行异步处理
-        handle_queue(
+        _queue_builtin(
             handle_merge_request_event, data, gitlab_token, gitlab_url, gitlab_url_slug
         )
         # 立马返回响应
@@ -172,8 +156,7 @@ def handle_gitlab_webhook(data):
         ), 200
     elif object_kind == "push":
         # 创建一个新进程进行异步处理
-        # TODO check if PUSH_REVIEW_ENABLED is needed here
-        handle_queue(handle_push_event, data, gitlab_token, gitlab_url, gitlab_url_slug)
+        _queue_builtin(handle_push_event, data, gitlab_token, gitlab_url, gitlab_url_slug)
         # 立马返回响应
         return jsonify(
             {
@@ -190,9 +173,7 @@ def handle_gitea_webhook(event_type, data):
     """
     处理 Gitea Webhook
     """
-    gitea_token = os.getenv("GITEA_ACCESS_TOKEN") or request.headers.get(
-        "X-Gitea-Token"
-    )
+    gitea_token = os.getenv("GITEA_ACCESS_TOKEN")
     if not gitea_token and _builtin_review_enabled():
         return jsonify({"message": "Missing Gitea access token"}), 400
 
@@ -200,14 +181,13 @@ def handle_gitea_webhook(event_type, data):
     gitea_url_slug = slugify_url(gitea_url)
 
     logger.info(f"Received Gitea event: {event_type}")
-    logger.info(f"Payload: {json.dumps(data)}")
 
     if event_type == "pull_request":
         # 异步触发显式配置的外部 Agent backend。
         if is_agent_review_enabled():
             handle_agent_queue(dispatch_agent_review, "gitea", data)
-        
-        handle_queue(
+
+        _queue_builtin(
             handle_gitea_pull_request_event,
             data,
             gitea_token,
@@ -220,7 +200,7 @@ def handle_gitea_webhook(event_type, data):
             }
         ), 200
     elif event_type == "push":
-        handle_queue(
+        _queue_builtin(
             handle_gitea_push_event, data, gitea_token, gitea_url, gitea_url_slug
         )
         return jsonify(

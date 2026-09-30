@@ -1,4 +1,4 @@
-"""Webhook authentication for the external Agent dispatch path."""
+"""Webhook authentication shared by all review dispatch paths."""
 from __future__ import annotations
 
 import hashlib
@@ -57,8 +57,8 @@ def _gitlab_signed_matches(signing_token: str, headers, body: bytes) -> bool:
 def verify_webhook(provider: str, headers, body: bytes) -> bool:
     """Verify a configured webhook secret or HMAC signature.
 
-    Legacy token headers remain accepted when a matching access-token env var
-    is configured. External Agent dispatch never accepts an absent secret.
+    Legacy token headers require a matching configured secret. Access-token
+    fallback is explicitly opt-in. No dispatch path accepts an absent secret.
     """
     provider = provider.lower()
     secret = _secret(provider)

@@ -175,7 +175,7 @@ streamlit run ui.py --server.port=5002 --server.address=0.0.0.0
 
 1. Token使用优先级
   - 系统优先使用 .env 文件中的 GITLAB_ACCESS_TOKEN。
-  - 如果 .env 文件中没有配置 GITLAB_ACCESS_TOKEN，则使用 Webhook 传递的Secret Token。
+  - 内置 LLM Review 必须配置 GITLAB_ACCESS_TOKEN；Webhook Secret Token 只用于入口认证。
 2. 网络访问要求
   - 请确保 GitLab 能够访问本系统。
   - 若内网环境受限，建议将系统部署在外网服务器上。
@@ -253,7 +253,7 @@ worker 必须能在 `PATH` 中找到所选 Agent CLI 和平台 CLI；服务只�
 
 如果只启用 External Agent Review，可同时设置 `LLM_REVIEW_ENABLED=0`；此时 Webhook 不要求项目配置 GitHub/GitLab/Gitea API token，平台操作由已认证的 CLI 完成。若保留内置 LLM Review，则仍需按原有配置提供对应平台 token。
 
-启用 External Agent Review 后，Webhook 必须配置对应的 `GITHUB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_SECRET` 或 `GITEA_WEBHOOK_SECRET`，服务会校验 GitLab token header 或 GitHub/Gitea HMAC 签名；GitLab Standard Webhooks 还可配置 `GITLAB_WEBHOOK_SIGNING_TOKEN` 校验 `webhook-id`/`webhook-timestamp`/`webhook-signature`。未通过校验不会创建 Agent Job。不要把平台 API token 当作新的 webhook secret 使用；旧 access token 回退只有显式设置 `AGENT_ALLOW_ACCESS_TOKEN_WEBHOOK_FALLBACK=1` 才启用。
+所有 Webhook Review 路径都必须配置对应的 `GITHUB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_SECRET` 或 `GITEA_WEBHOOK_SECRET`，服务会校验 GitLab token header 或 GitHub/Gitea HMAC 签名；GitLab Standard Webhooks 还可配置 `GITLAB_WEBHOOK_SIGNING_TOKEN` 校验 `webhook-id`/`webhook-timestamp`/`webhook-signature`。未通过校验不会进入任何 Review queue。不要把平台 API token 当作新的 webhook secret 使用；旧 access token 回退只有显式设置 `AGENT_ALLOW_ACCESS_TOKEN_WEBHOOK_FALLBACK=1` 才启用。
 
 仓库发现与临时目录由 `conf/agent_repos.yml` 控制：
 
