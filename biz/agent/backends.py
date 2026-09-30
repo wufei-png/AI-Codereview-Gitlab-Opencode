@@ -55,7 +55,7 @@ class BackendExecutionError(RuntimeError):
 class AgentBackend(Protocol):
     name: str
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None, worktree_path: Path | None = None) -> BackendResult:
         ...
 
 
@@ -208,7 +208,7 @@ def terminate_active_backends(*, grace_seconds: float = 5.0) -> None:
 class OpenCodeServeBackend:
     name = "opencode"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None, worktree_path: Path | None = None) -> BackendResult:
         del source_repo
         if _BACKEND_SHUTDOWN.is_set() or (cancel is not None and cancel.is_set()):
             raise BackendExecutionError("opencode cancelled before start")
@@ -401,43 +401,48 @@ class OpenCodeServeBackend:
 class CodexCliBackend:
     name = "codex"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None, worktree_path: Path | None = None) -> BackendResult:
         binary = _required_binary(config.codex_bin)
+        cwd = worktree_path or job_root
         args = [
-            binary, "exec", "--sandbox", "workspace-write", "--cd", str(job_root),
+            binary, "exec", "--sandbox", "workspace-write", "--cd", str(cwd),
             "--config", "sandbox_workspace_write.network_access=true",
             "--skip-git-repo-check", "--ephemeral", "--color", "never", "-",
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
+        if worktree_path is not None:
+            args[-1:-1] = ["--add-dir", str(job_root)]
+        return _run_cli(self.name, args, prompt, cwd, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 class ClaudeCliBackend:
     name = "claude"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None, worktree_path: Path | None = None) -> BackendResult:
         binary = _required_binary(config.claude_bin)
+        cwd = worktree_path or job_root
         args = [
             binary, "-p", "--permission-mode", "bypassPermissions", "--tools", "default",
             "--no-session-persistence",
             "--add-dir", str(job_root),
             "--output-format", "text",
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
+        return _run_cli(self.name, args, prompt, cwd, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 class PiCliBackend:
     name = "pi"
 
-    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None) -> BackendResult:
+    def run(self, *, prompt: str, job_root: Path, source_repo: Path, config: AgentReviewConfig, cancel: threading.Event | None = None, worktree_path: Path | None = None) -> BackendResult:
         del source_repo
         binary = _required_binary(config.pi_bin)
+        cwd = worktree_path or job_root
         skill_path = job_root / ".agent-skill" / "SKILL.md"
         args = [
             binary, "--print", "--no-session", "--no-approve", "--no-extensions",
             "--no-prompt-templates", "--no-context-files",
             "--tools", "read,bash,edit,write,grep,find,ls", "--skill", str(skill_path),
         ]
-        return _run_cli(self.name, args, prompt, job_root, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
+        return _run_cli(self.name, args, prompt, cwd, config.backend_timeout, env=_agent_env(self.name), cancel=cancel)
 
 
 def create_backend(config: AgentReviewConfig) -> AgentBackend:

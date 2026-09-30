@@ -27,6 +27,7 @@ class WorkspaceContext:
     cleaned: bool = False
     skill_path: Path | None = None
     source_repo_owned: bool = False
+    worktree_path: Path | None = None
 
     @property
     def latest_revision(self) -> str:
@@ -194,6 +195,11 @@ class WorkspaceManager:
             self._create_agent_source(
                 source_repo, agent_repo, request.remote_url, source_revision, target_revision,
             )
+            worktree_path = job_root / "worktree"
+            _git(agent_repo, "worktree", "add", "--detach", str(worktree_path), source_revision, timeout=self.config.clone_timeout)
+            head = _git(worktree_path, "rev-parse", "HEAD", timeout=self.config.clone_timeout).stdout.strip()
+            if head != source_revision:
+                raise RuntimeError("prepared worktree HEAD does not match Source Revision")
             skill_path = job_root / ".agent-skill" / "SKILL.md"
             if not self.config.shared_review_skill.is_file():
                 raise RuntimeError(f"shared review skill not found: {self.config.shared_review_skill}")
@@ -202,7 +208,7 @@ class WorkspaceManager:
             return WorkspaceContext(
                 source_repo=agent_repo, job_root=job_root, clone_path=clone_path,
                 source_revision=source_revision, target_revision=target_revision,
-                source_branch=request.source_branch, skill_path=skill_path, source_repo_owned=True,
+                source_branch=request.source_branch, skill_path=skill_path, source_repo_owned=True, worktree_path=worktree_path,
             )
         except Exception:
             if job_root is not None:
@@ -310,7 +316,7 @@ class WorkspaceManager:
     ) -> None:
         try:
             subprocess.run(
-                ["git", "clone", "--shared", "--no-checkout", str(source_repo), str(target)],
+                ["git", "clone", "--no-hardlinks", "--dissociate", "--no-checkout", str(source_repo), str(target)],
                 check=True, capture_output=True, text=True, timeout=self.config.clone_timeout,
             )
             for revision, ref in (

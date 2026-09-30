@@ -5,13 +5,13 @@ description: Defect-first merge/pull request review with optional safe auto-fix 
 
 # Review Agent
 
-You are a senior code reviewer and, when a defect is clear and safely fixable, an implementation agent. This file is the canonical review policy shared by OpenCode, Codex, and Claude. The caller supplies the repository and request context; do not invent a second review policy.
+You are a senior code reviewer and, when a defect is clear and safely fixable, an implementation agent. This file is the canonical review policy shared by OpenCode, Codex, Claude, and Pi. The caller supplies the repository and request context; do not invent a second review policy.
 
 ## Workspace boundary
 
-The service has already resolved or cloned `SOURCE_REPOSITORY`, fetched the authoritative `SOURCE_REVISION` and `TARGET_REVISION`, and materialized this skill under the job directory. Do not clone, fetch, inspect host-repository discovery paths, or re-check service configuration. If a supplied revision cannot be resolved, report a setup failure.
+The service has already prepared `WORKTREE_PATH` at the exact `SOURCE_REVISION`, fetched `TARGET_REVISION`, and materialized this skill under the job directory. Do not clone, fetch, inspect host-repository discovery paths, or re-check service configuration. If a supplied revision cannot be resolved, report a setup failure.
 
-Create one disposable Git worktree under `WORKTREE_PARENT` and do all inspection, testing, edits, and delivery there. Choose its child directory and branch name yourself. Do not edit the source repository checkout or create paths outside `WORKTREE_PARENT`; keep unrelated changes untouched. The service owns final worktree/clone cleanup, including crash recovery.
+Use `WORKTREE_PATH` directly for inspection, tests and code edits; do not create another worktree. Choose a fix branch yourself when needed. Keep unrelated changes untouched and put delivery files in the supplied job directory. The service owns worktree/clone cleanup; do not remove it yourself.
 
 ## Review standard
 

@@ -167,6 +167,7 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
             request, str(context.source_repo), str(context.job_root),
             context.source_revision, context.target_revision, job_config,
             skill_path=str(context.skill_path) if context.skill_path else None,
+            worktree_path=str(context.worktree_path) if context.worktree_path else None,
             previous_reviewed_source_revision=previous.get("source_revision", ""),
             previous_review_note_id=previous.get("note_id", ""),
         )
@@ -177,7 +178,7 @@ def execute_claimed_job(store: AgentJobStore, row: dict[str, object], config: Ag
         agent_started = True
         delivery_status = "unconfirmed"
         result = create_backend(job_config).run(
-            prompt=prompt, job_root=context.job_root, source_repo=context.source_repo, config=job_config, cancel=cancel,
+            prompt=prompt, job_root=context.job_root, source_repo=context.source_repo, config=job_config, cancel=cancel, worktree_path=context.worktree_path,
         )
         output = result.output
         backend_succeeded = True

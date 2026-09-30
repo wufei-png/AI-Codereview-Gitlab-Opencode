@@ -169,6 +169,7 @@ def build_prompt(
     config: AgentReviewConfig,
     *,
     skill_path: str | None = None,
+    worktree_path: str | None = None,
     previous_reviewed_source_revision: str = "",
     previous_review_note_id: str = "",
 ) -> str:
@@ -188,7 +189,6 @@ The service has already resolved the repository and fetched the latest remote so
 - SOURCE_REMOTE_URL: {_safe_remote_url(request.remote_url)}
 - TARGET_PROJECT_PATH: {request.target_project_path or request.project_path}
 - TARGET_REMOTE_URL: {_safe_remote_url(request.target_remote_url or request.remote_url)}
-- SOURCE_REPOSITORY: {source_repo}
 - SOURCE_BRANCH: {request.source_branch}
 - TARGET_BRANCH: {request.target_branch}
 - SOURCE_REVISION: {source_revision}
@@ -201,8 +201,8 @@ The service has already resolved the repository and fetched the latest remote so
 - PREVIOUS_REVIEW_NOTE_ID: {previous_review_note_id or "(none)"}
 - REVIEW_NOTE_MARKER: {request.review_marker}
 - DELIVERY_RECEIPT_PATH: {job_root}/.agent-delivery-receipt.json
-- WORKTREE_PARENT: {job_root}
-- SERVICE_PREPARED_WORKSPACE: true; SOURCE_REPOSITORY already contains the fetched authoritative revisions. Do not clone, fetch, or inspect host-repository discovery paths.
+- WORKTREE_PATH: {worktree_path or job_root}
+- SERVICE_PREPARED_WORKSPACE: true; WORKTREE_PATH is already checked out at SOURCE_REVISION and contains both authoritative revisions. Do not clone, fetch, or inspect host-repository discovery paths.
 
-Read the canonical skill for the Agent-owned worktree, review, auto-fix, and delivery procedure. If a supplied revision cannot be resolved, report a setup failure. Do not modify paths outside WORKTREE_PARENT.
+Read the canonical skill for review, auto-fix, and delivery. Use WORKTREE_PATH directly; do not create another worktree. If a supplied revision cannot be resolved, report a setup failure. Code changes belong only in WORKTREE_PATH; delivery files belong in the supplied job directory.
 """

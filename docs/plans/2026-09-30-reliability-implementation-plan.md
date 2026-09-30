@@ -86,7 +86,7 @@ lease 丢失或 heartbeat 失败要取消当前任务；其他 review 不受影�
 
 依赖：3。修改：`workspace.py`、`review_request.py`、`backends.py`、canonical skill、worktree/prompt tests、ADR-0001/0002/README。
 
-job 内独立 objects 替代 `.agent-source` 的 `clone --shared`，服务创建 `worktree/`，HEAD 等于 resolved Source Revision，fork target revision 同样可在目录内解析。backend cwd 指向 worktree；OpenCode config/skill/receipt 仍位于拥有的 job 目录，共享 job 路径即可工作。处理 native sandbox 对 receipt 写路径的要求，但不把它升级成权限剥离工程。
+job 内独立 objects 替代 `.agent-source` 的 `clone --shared`，服务创建 `worktree/`，HEAD 等于 resolved Source Revision，fork target revision 同样可在目录内解析。三种本地 CLI cwd 指向 worktree；OpenCode 保留 job 根作为会话目录加载框架 config，任务 context 明确提供 worktree。config/skill/receipt 位于拥有的 job 目录，共享 job 路径即可工作。此调整避免生成配置覆盖 source worktree 的文件。处理 native sandbox 对 receipt 写路径的要求，但不把它升级成权限剥离工程。
 
 Prompt/skill 给现成 `WORKTREE_PATH`，不再要求 Agent worktree add/clone/fetch；可减少 workspace 别名，保持 revisions、previous note 和 stacked fix 上下文。Agent 可以创建自己的 fix branch。清理使用 Git worktree remove/prune，失败独立记录；不改原始 checkout。取消未停止时不删除执行目录。
 
@@ -144,7 +144,7 @@ June 文档明确 historical/superseded；August 文档引用新 ADR，不按旧
 | 1 入口与 CI | 已完成 | route/security 42 passed；全套 183 passed；CI 已配置，GitHub 执行待推送后验证 |
 | 2 HTTP/capability | 已完成 | provider/resolver 36 passed；全套 216 passed；三平台 fork source 解析修复；无 live provider smoke |
 | 3 取消/lifecycle | 已完成 | worker 11 passed；全套 227 passed；任务级取消与 native stdout 验证；未知远程执行保留目录人工检查 |
-| 4 worktree | 待实施 | |
+| 4 worktree | 已完成 | workspace 6 passed；全套 233 passed；含借用 alternates 的 local seed 与 fork；CLI cwd 固定 SHA，OpenCode job 根加载配置；无 live backend smoke |
 | 5 receipt | 待实施 | |
 | 6 operations | 待实施 | |
 | 7 release/docs | 待实施 | |
