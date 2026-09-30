@@ -100,6 +100,24 @@ def test_public_github_native_api_and_issue_browser_alias(tmp_path):
     assert read_delivery_receipt(path, request, 'a' * 40, 'b' * 40).error is None
 
 
+@pytest.mark.parametrize('configured_api', [None, 'https://api-gateway.example/github'])
+def test_enterprise_receipt_does_not_implicitly_accept_public_github_api(tmp_path, monkeypatch, configured_api):
+    request = request_for('github')
+    if configured_api:
+        monkeypatch.setenv('GITHUB_API_URL', configured_api)
+    else:
+        monkeypatch.delenv('GITHUB_API_URL', raising=False)
+    note = native_note(request)
+    note['issue_url'] = 'https://api.github.com/repos/o/r/issues/1'
+    path = tmp_path / 'receipt.json'
+    path.write_text(json.dumps(note))
+    assert read_delivery_receipt(path, request, 'a' * 40, 'b' * 40).error
+    if configured_api:
+        note['issue_url'] = configured_api + '/repos/o/r/issues/1'
+        path.write_text(json.dumps(note))
+        assert read_delivery_receipt(path, request, 'a' * 40, 'b' * 40).error is None
+
+
 @pytest.mark.parametrize('raw', ['not JSON', '[]', '{"id":9}'])
 def test_malformed_or_partial_receipt_is_not_delivery(tmp_path, raw):
     path = tmp_path / 'receipt.json'

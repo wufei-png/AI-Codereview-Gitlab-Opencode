@@ -65,7 +65,11 @@ def _target_error(payload: dict, request: AgentReviewRequest, note_id: str) -> s
             continue  # GitLab does not expose this GitHub-shaped API field.
         allowed_hosts = {review.netloc}
         if request.provider == "github":
-            allowed_hosts.add(urlparse(os.getenv("GITHUB_API_URL", "https://api.github.com")).netloc)
+            configured_api = os.getenv("GITHUB_API_URL")
+            if configured_api:
+                allowed_hosts.add(urlparse(configured_api).netloc)
+            elif review.hostname == "github.com":
+                allowed_hosts.add("api.github.com")
         if candidate.netloc not in allowed_hosts or native.group(1) != project:
             return f"{field} belongs to another repository"
         resource = native.group(3)
